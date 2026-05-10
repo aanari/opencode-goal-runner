@@ -82,6 +82,38 @@ For local development, install a symlink to the release binary instead of copyin
 
 The installed runner is a Rust binary. The target machine does not need Node.js, Bun, or the OpenCode JS SDK for the runner itself.
 
+## Release binaries
+
+Build named release artifacts into `./dist`:
+
+```sh
+./build-release.sh
+```
+
+Artifacts:
+
+```text
+dist/opencode-goal-runner-aarch64-apple-darwin
+dist/opencode-goal-runner-x86_64-unknown-linux-musl
+```
+
+Use `--mac-only` to build only the Apple Silicon binary, or `--check` to run `cargo test` before building:
+
+```sh
+./build-release.sh --check
+./build-release.sh --mac-only
+```
+
+Linux amd64 cross-builds from macOS require Zig and cargo-zigbuild:
+
+```sh
+brew install zig
+cargo install cargo-zigbuild
+rustup target add x86_64-unknown-linux-musl
+```
+
+`dist/` is ignored by git. Do not commit built binaries.
+
 ## OpenCode setup
 
 Start OpenCode server mode in the project you want the agent to work on:
@@ -541,10 +573,10 @@ cargo llvm-cov --fail-under-lines 95
 
 `cargo llvm-cov --fail-under-lines 95` requires `cargo-llvm-cov` and fails unless total line coverage is at least 95%.
 
-Build the release binary:
+Build release artifacts:
 
 ```sh
-cargo build --release
+./build-release.sh --check
 ```
 
 Install:
@@ -578,6 +610,7 @@ Before cutting a local release or sharing a binary:
 ```sh
 git status --short
 ./install.sh --check
+./build-release.sh --mac-only
 ./install.sh
 env -i HOME="$HOME" PATH="$HOME/.local/bin:/usr/bin:/bin:/opt/homebrew/bin" \
   opencode-goal-runner --version
