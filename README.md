@@ -449,6 +449,40 @@ Run local tests:
 cargo test
 ```
 
+Coverage baseline before the test-hardening pass:
+
+```text
+cargo llvm-cov --summary-only
+line coverage: 38.50%
+function coverage: 32.59%
+tests: 11
+```
+
+Current release-candidate coverage after the test-hardening pass:
+
+```text
+cargo llvm-cov --summary-only
+line coverage: 95.91%
+function coverage: 93.37%
+tests: 36
+```
+
+The automated coverage suite includes unit tests for config resolution, path resolution, selector validation, prompt/message parsing, SQLite lifecycle, lock recovery, injection state, backoff, and no-progress handling. It also includes local OpenCode-compatible HTTP server tests for doctor, sessions, `create --latest`, idle injection, busy/retry waiting, permission/question blockers, user-message waiting, completion, pause-on-no-progress, logs output, and CLI/env/config precedence.
+
+Run the coverage report:
+
+```sh
+make coverage-summary
+```
+
+Run the release-candidate coverage gate:
+
+```sh
+make coverage
+```
+
+`make coverage` requires `cargo-llvm-cov` and fails unless line coverage is at least 95%.
+
 Build the release binary:
 
 ```sh

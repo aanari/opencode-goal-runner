@@ -2,10 +2,16 @@ PREFIX ?= $(HOME)/.local
 BINDIR ?= $(PREFIX)/bin
 BIN := target/release/opencode-goal-runner
 
-.PHONY: build install
+.PHONY: build install coverage coverage-summary
 
 build:
 	cargo build --release
+
+coverage-summary:
+	cargo llvm-cov --summary-only
+
+coverage:
+	cargo llvm-cov --fail-under-lines 95
 
 install: build
 	mkdir -p "$(BINDIR)"
