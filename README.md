@@ -2,7 +2,7 @@
 
 `opencode-goal-runner` is a self-contained Rust sidecar that approximates Codex goal mode for OpenCode without forking OpenCode.
 
-It owns a persistent goal record, watches an OpenCode session over server mode, and injects continuation prompts only when the session is idle and unblocked. The command and skill assets are optional front-end helpers. The Rust binary owns the runtime loop.
+It owns a persistent goal record, watches an OpenCode session over server mode, and injects continuation prompts only when the session is idle and unblocked. The optional `/goal` command is only a front-end helper. The Rust binary owns the runtime loop.
 
 ## Status
 
@@ -24,7 +24,7 @@ Implemented:
 - restart-safe in-flight continuation recovery
 - no-progress backoff and pause protection
 - completion detection when an assistant response starts with `GOAL_COMPLETE:`
-- optional `/goal` command and `goal-lite` skill installer
+- optional self-contained `/goal` command installer
 - `doctor` diagnostics for server reachability, API endpoints, model behavior, and asset installation
 
 Known limitations:
@@ -97,7 +97,7 @@ OPENCODE_SERVER_PASSWORD=... opencode serve --hostname 127.0.0.1 --port 4096
 OPENCODE_GOAL_PASSWORD=... opencode-goal-runner doctor
 ```
 
-Install the optional OpenCode command and skill assets:
+Install the optional OpenCode command asset:
 
 ```sh
 opencode-goal-runner install-opencode-assets
@@ -107,10 +107,9 @@ This writes:
 
 ```text
 ~/.config/opencode/command/goal.md
-~/.config/opencode/skill/goal-lite/SKILL.md
 ```
 
-The sidecar works without these assets, but they improve the model-facing contract when you use `/goal` inside OpenCode.
+The sidecar works without this command, but it gives you a convenient model-facing contract when you use `/goal` inside OpenCode.
 
 ## Config file
 
@@ -206,7 +205,7 @@ It checks:
 - OpenCode server reachability
 - `/session`, `/session/status`, `/permission`, and `/question`
 - selected model behavior unless `--skip-model-check` is passed
-- optional `/goal` command and `goal-lite` skill installation
+- optional `/goal` command installation
 
 Useful variants:
 
@@ -395,7 +394,7 @@ Continuation messages feel noisy:
 
 ## Safe unattended-use guidance
 
-Use goal-lite for bounded tasks first:
+Use the sidecar for bounded tasks first:
 
 - docs updates
 - focused bug fixes
@@ -462,7 +461,7 @@ It intentionally does not import the OpenCode JS SDK at runtime.
 
 ## OpenCode assets
 
-The optional `/goal` command starts a session with the goal-lite contract. It does not run the sidecar by itself.
+The optional `/goal` command starts a session with the same goal contract that the sidecar injects on continuations. It does not run the sidecar by itself.
 
 ```sh
 opencode-goal-runner install-opencode-assets
@@ -578,6 +577,6 @@ opencode-goal-runner start --latest \
 
 ## Why this approach
 
-A command and skill alone can shape behavior, but they cannot wake an idle session. A blind shell loop can wake the session, but it cannot reliably respect blockers, locks, user input, or in-flight turns.
+A command alone can shape behavior, but it cannot wake an idle session. A blind shell loop can wake the session, but it cannot reliably respect blockers, locks, user input, or in-flight turns.
 
 The sidecar is the best no-fork tradeoff for now: OpenCode remains unmodified, the runner is packaged as a standalone binary, and the loop is conservative enough to dogfood safely on bounded tasks. Native OpenCode goal mode would still be cleaner long term.
