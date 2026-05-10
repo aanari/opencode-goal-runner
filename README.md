@@ -2,11 +2,11 @@
 
 `opencode-goal-runner` is a self-contained Rust sidecar that approximates Codex goal mode for OpenCode without forking or modifying OpenCode.
 
-It owns a persistent goal record, watches an OpenCode session over server mode, and injects continuation prompts only when the session is idle and unblocked. The optional `/goal` command is self-contained and only loads the prompt contract. The Rust binary owns the runtime loop. There is no `goal-lite` skill, and the installed runner has no Node.js, Bun, or OpenCode JS SDK runtime dependency.
+It owns a persistent goal record, watches an OpenCode session over server mode, and injects continuation prompts only when the session is idle and unblocked. The optional `/goal` command is self-contained and only loads the prompt contract. The Rust binary owns the runtime loop, and the installed runner has no Node.js, Bun, or OpenCode JS SDK runtime dependency.
 
 ## Status
 
-Release-candidate sidecar, still external to OpenCode.
+Local sidecar, still external to OpenCode.
 
 Implemented:
 
@@ -14,7 +14,7 @@ Implemented:
 - direct OpenCode HTTP client
 - SQLite goal store under `~/.config/opencode-goal-runner/goals.sqlite3` by default
 - config file support at `~/.config/opencode-goal-runner/config.toml`
-- `start`, `create`, `run`, `pause`, `resume`, `clear`, `inspect`, `logs`, `list`, `sessions`, `doctor`, `install-opencode-assets`, and `inject-once`
+- `start`, `create`, `run`, `pause`, `resume`, `clear`, `inspect`, `logs`, `list`, `sessions`, `doctor`, `install-opencode-command`, and `inject-once`
 - idle polling through `GET /session/status`
 - pending permission and question blocker checks
 - async continuation injection through `POST /session/{sessionID}/prompt_async`
@@ -25,7 +25,7 @@ Implemented:
 - no-progress backoff and pause protection
 - completion detection when an assistant response starts with `GOAL_COMPLETE:`
 - optional self-contained `/goal` command installer
-- `doctor` diagnostics for server reachability, API endpoints, model behavior, and asset installation
+- `doctor` diagnostics for server reachability, API endpoints, model behavior, and `/goal` command installation
 
 Known limitations:
 
@@ -129,10 +129,10 @@ OPENCODE_SERVER_PASSWORD=... opencode serve --hostname 127.0.0.1 --port 4096
 OPENCODE_GOAL_PASSWORD=... opencode-goal-runner doctor
 ```
 
-Install the optional OpenCode command asset:
+Install the optional OpenCode `/goal` command:
 
 ```sh
-opencode-goal-runner install-opencode-assets
+opencode-goal-runner install-opencode-command
 ```
 
 This writes:
@@ -266,7 +266,7 @@ opencode-goal-runner doctor --skip-model-check
 opencode-goal-runner doctor --target-dir /tmp/opencode-config
 ```
 
-`doctor` prints warnings for model and asset problems where the HTTP server itself is still usable.
+`doctor` prints warnings for model or `/goal` command problems where the HTTP server itself is still usable.
 
 ## Starting a goal
 
@@ -510,12 +510,12 @@ POST /session/{sessionID}/prompt_async
 
 It intentionally does not import the OpenCode JS SDK at runtime.
 
-## OpenCode assets
+## OpenCode command
 
 The optional `/goal` command starts a session with the same goal contract that the sidecar injects on continuations. It does not run the sidecar by itself.
 
 ```sh
-opencode-goal-runner install-opencode-assets
+opencode-goal-runner install-opencode-command
 ```
 
 Inside OpenCode:
@@ -539,22 +539,13 @@ Run local tests:
 cargo test
 ```
 
-Coverage baseline before the test-hardening pass:
+Current coverage:
 
 ```text
 cargo llvm-cov --summary-only
-line coverage: 38.50%
-function coverage: 32.59%
-tests: 11
-```
-
-Current release-candidate coverage after the test-hardening pass:
-
-```text
-cargo llvm-cov --summary-only
-line coverage: 95.31%
-function coverage: 92.79%
-tests: 37
+line coverage: 95.33%
+function coverage: 92.82%
+tests: 38
 ```
 
 The automated coverage suite includes unit tests for config resolution, path resolution, selector validation, prompt/message parsing, SQLite lifecycle, lock recovery, injection state, backoff, and no-progress handling. It also includes local OpenCode-compatible HTTP server tests for doctor, sessions, `create --latest`, idle injection, busy/retry waiting, permission/question blockers, user-message waiting, completion, pause-on-no-progress, logs output, and CLI/env/config precedence.
@@ -565,7 +556,7 @@ Run the coverage report:
 cargo llvm-cov --summary-only
 ```
 
-Run the release-candidate coverage gate:
+Run the coverage gate:
 
 ```sh
 cargo llvm-cov --fail-under-lines 95

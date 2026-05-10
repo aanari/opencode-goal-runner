@@ -244,7 +244,8 @@ enum Command {
         #[arg(long, default_value_t = 60)]
         timeout_seconds: u64,
     },
-    InstallOpencodeAssets {
+    #[command(name = "install-opencode-command", alias = "install-opencode-assets")]
+    InstallOpencodeCommand {
         #[arg(long)]
         target_dir: Option<PathBuf>,
 
@@ -448,8 +449,8 @@ fn run_command(cli: Cli) -> Result<()> {
                 timeout: Duration::from_secs(timeout_seconds),
             },
         ),
-        Command::InstallOpencodeAssets { target_dir, force } => {
-            install_opencode_assets(resolve_opencode_config_dir(target_dir)?, force)
+        Command::InstallOpencodeCommand { target_dir, force } => {
+            install_opencode_command(resolve_opencode_config_dir(target_dir)?, force)
         }
         Command::InjectOnce {
             session,
@@ -1284,7 +1285,7 @@ fn doctor(client: &OpenCodeClient, input: DoctorInput) -> Result<()> {
     println!("warn OpenCode /goal command is not installed");
     println!("missing {}", command_path.display());
     println!(
-        "install with: opencode-goal-runner install-opencode-assets --target-dir {}",
+        "install with: opencode-goal-runner install-opencode-command --target-dir {}",
         input.target_dir.display()
     );
     Ok(())
@@ -1338,9 +1339,9 @@ fn doctor_model_check_session(
     }
 }
 
-fn install_opencode_assets(target_dir: PathBuf, force: bool) -> Result<()> {
+fn install_opencode_command(target_dir: PathBuf, force: bool) -> Result<()> {
     let command_path = target_dir.join("command").join("goal.md");
-    write_asset(command_path.clone(), GOAL_COMMAND_ASSET, force)?;
+    write_file(command_path.clone(), GOAL_COMMAND_ASSET, force)?;
     println!("installed /goal command: {}", command_path.display());
     println!("next:");
     println!("  1. Restart OpenCode or reload config if needed.");
@@ -1351,7 +1352,7 @@ fn install_opencode_assets(target_dir: PathBuf, force: bool) -> Result<()> {
     Ok(())
 }
 
-fn write_asset(path: PathBuf, content: &str, force: bool) -> Result<()> {
+fn write_file(path: PathBuf, content: &str, force: bool) -> Result<()> {
     if path.exists() && !force {
         bail!(
             "{} already exists, rerun with --force to overwrite",
@@ -2966,6 +2967,29 @@ mod tests {
     }
 
     #[test]
+    fn parses_install_opencode_command_cli_and_hidden_alias() {
+        for command in ["install-opencode-command", "install-opencode-assets"] {
+            let cli = Cli::try_parse_from([
+                "opencode-goal-runner",
+                command,
+                "--target-dir",
+                "/tmp/opencode-test",
+                "--force",
+            ])
+            .unwrap();
+            match cli.command {
+                Command::InstallOpencodeCommand {
+                    target_dir, force, ..
+                } => {
+                    assert_eq!(target_dir, Some(PathBuf::from("/tmp/opencode-test")));
+                    assert!(force);
+                }
+                _ => panic!("expected install-opencode-command command"),
+            }
+        }
+    }
+
+    #[test]
     fn parses_logs_cli() {
         let cli = Cli::try_parse_from([
             "opencode-goal-runner",
@@ -3482,9 +3506,8 @@ in_flight_timeout_ms = 444
         let server = FakeOpenCode::start();
         server.push_prompt_reply(Some("OPENCODE_GOAL_DOCTOR_OK"));
         let target_dir = test_dir();
-        install_opencode_assets(target_dir.clone(), false).unwrap();
+        install_opencode_command(target_dir.clone(), false).unwrap();
         assert!(target_dir.join("command").join("goal.md").is_file());
-        assert!(!target_dir.join("skill").exists());
         doctor(
             &server.client(),
             DoctorInput {
@@ -3934,17 +3957,17 @@ in_flight_timeout_ms = 444
         ]))
         .unwrap();
 
-        let asset_dir = test_dir();
+        let command_dir = test_dir();
         run_cli_from(base_args(vec![
-            "install-opencode-assets".to_string(),
+            "install-opencode-command".to_string(),
             "--target-dir".to_string(),
-            asset_dir.display().to_string(),
+            command_dir.display().to_string(),
         ]))
         .unwrap();
         run_cli_from(base_args(vec![
             "doctor".to_string(),
             "--target-dir".to_string(),
-            asset_dir.display().to_string(),
+            command_dir.display().to_string(),
             "--skip-model-check".to_string(),
         ]))
         .unwrap();
