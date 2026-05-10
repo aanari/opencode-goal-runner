@@ -1,8 +1,8 @@
 # opencode-goal-runner
 
-`opencode-goal-runner` is a self-contained Rust sidecar that approximates Codex goal mode for OpenCode without forking OpenCode.
+`opencode-goal-runner` is a self-contained Rust sidecar that approximates Codex goal mode for OpenCode without forking or modifying OpenCode.
 
-It owns a persistent goal record, watches an OpenCode session over server mode, and injects continuation prompts only when the session is idle and unblocked. The optional `/goal` command is only a front-end helper. The Rust binary owns the runtime loop.
+It owns a persistent goal record, watches an OpenCode session over server mode, and injects continuation prompts only when the session is idle and unblocked. The optional `/goal` command is self-contained and only loads the prompt contract. The Rust binary owns the runtime loop. There is no `goal-lite` skill, and the installed runner has no Node.js, Bun, or OpenCode JS SDK runtime dependency.
 
 ## Status
 
