@@ -919,6 +919,15 @@ fn run_goal_loop_locked(
 
 fn tick_goal(store: &Store, client: &OpenCodeClient, goal: &Goal) -> Result<TickResult> {
     let now = now_ms()?;
+    if client.request_count_for_session("permission", &goal.session_id)? > 0 {
+        store.update_decision(&goal.goal_id, "waiting_on_permission", None)?;
+        return Ok(TickResult { injected: false });
+    }
+    if client.request_count_for_session("question", &goal.session_id)? > 0 {
+        store.update_decision(&goal.goal_id, "waiting_on_question", None)?;
+        return Ok(TickResult { injected: false });
+    }
+
     match client.session_status(&goal.session_id)? {
         None | Some(SessionStatus::Idle) => {}
         Some(SessionStatus::Busy) => {
@@ -937,15 +946,6 @@ fn tick_goal(store: &Store, client: &OpenCodeClient, goal: &Goal) -> Result<Tick
             )?;
             return Ok(TickResult { injected: false });
         }
-    }
-
-    if client.request_count_for_session("permission", &goal.session_id)? > 0 {
-        store.update_decision(&goal.goal_id, "waiting_on_permission", None)?;
-        return Ok(TickResult { injected: false });
-    }
-    if client.request_count_for_session("question", &goal.session_id)? > 0 {
-        store.update_decision(&goal.goal_id, "waiting_on_question", None)?;
-        return Ok(TickResult { injected: false });
     }
 
     let snapshot = client.message_snapshot(&goal.session_id)?;
@@ -3640,6 +3640,18 @@ in_flight_timeout_ms = 444
                 Some(decision.to_string())
             );
         }
+
+        let server = FakeOpenCode::start();
+        server.add_session("ses_busy_permission", "Busy Permission", 1);
+        server.set_status("ses_busy_permission", serde_json::json!({ "type": "busy" }));
+        server.add_permission("ses_busy_permission");
+        let store = Store::open(test_db_path()).unwrap();
+        let goal = create_test_goal_record(&store, &server, "ses_busy_permission", "blocked", 3);
+        tick_goal(&store, &server.client(), &goal).unwrap();
+        assert_eq!(
+            store.goal(&goal.goal_id).unwrap().unwrap().last_decision,
+            Some("waiting_on_permission".to_string())
+        );
     }
 
     #[test]
