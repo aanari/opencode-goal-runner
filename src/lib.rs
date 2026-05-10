@@ -2652,7 +2652,6 @@ mod tests {
     fn handle_connection(mut stream: TcpStream, state: &Arc<Mutex<FakeState>>) {
         let _ = stream.set_read_timeout(Some(Duration::from_secs(1)));
         let Some(request) = read_request(&mut stream) else {
-            write_response(&mut stream, 400, "bad request");
             return;
         };
         let (status, body) = route_request(request, state);

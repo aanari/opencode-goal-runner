@@ -490,7 +490,7 @@ Current release-candidate coverage after the test-hardening pass:
 
 ```text
 cargo llvm-cov --summary-only
-line coverage: 95.24%
+line coverage: 95.27%
 function coverage: 92.72%
 tests: 37
 ```
