@@ -39,7 +39,7 @@ Known limitations:
 Build and install to a user-writable bin directory:
 
 ```sh
-make install
+./install.sh
 ```
 
 By default this installs:
@@ -48,10 +48,10 @@ By default this installs:
 ~/.local/bin/opencode-goal-runner
 ```
 
-If `~/.local/bin` is not on `PATH`, `make install` prints the shell line to add. You can override the destination:
+If `~/.local/bin` is not on `PATH`, `install.sh` prints the shell line to add. You can override the destination:
 
 ```sh
-make install BINDIR="$HOME/bin"
+BINDIR="$HOME/bin" ./install.sh
 ```
 
 Check the installed binary from a mostly clean shell:
@@ -66,6 +66,18 @@ Manual build only:
 ```sh
 cargo build --release
 ./target/release/opencode-goal-runner --version
+```
+
+Uninstall only the installed command:
+
+```sh
+./install.sh --uninstall
+```
+
+For local development, install a symlink to the release binary instead of copying it:
+
+```sh
+./install.sh --symlink
 ```
 
 The installed runner is a Rust binary. The target machine does not need Node.js, Bun, or the OpenCode JS SDK for the runner itself.
@@ -490,8 +502,8 @@ Current release-candidate coverage after the test-hardening pass:
 
 ```text
 cargo llvm-cov --summary-only
-line coverage: 95.27%
-function coverage: 92.72%
+line coverage: 95.31%
+function coverage: 92.79%
 tests: 37
 ```
 
@@ -500,16 +512,16 @@ The automated coverage suite includes unit tests for config resolution, path res
 Run the coverage report:
 
 ```sh
-make coverage-summary
+cargo llvm-cov --summary-only
 ```
 
 Run the release-candidate coverage gate:
 
 ```sh
-make coverage
+cargo llvm-cov --fail-under-lines 95
 ```
 
-`make coverage` requires `cargo-llvm-cov` and fails unless line coverage is at least 95%.
+`cargo llvm-cov --fail-under-lines 95` requires `cargo-llvm-cov` and fails unless total line coverage is at least 95%.
 
 Build the release binary:
 
@@ -520,7 +532,7 @@ cargo build --release
 Install:
 
 ```sh
-make install
+./install.sh
 ```
 
 Live check against OpenCode:
@@ -547,13 +559,13 @@ Before cutting a local release or sharing a binary:
 
 ```sh
 git status --short
-cargo test
-make coverage
-cargo build --release
-make install
+./install.sh --check
+./install.sh
 env -i HOME="$HOME" PATH="$HOME/.local/bin:/usr/bin:/bin:/opt/homebrew/bin" \
   opencode-goal-runner --version
 ```
+
+No Makefile, Node.js, Bun, OpenCode JS SDK, or CI wrapper is required for local install.
 
 Optional live smoke:
 

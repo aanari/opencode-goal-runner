@@ -2650,7 +2650,6 @@ mod tests {
     }
 
     fn handle_connection(mut stream: TcpStream, state: &Arc<Mutex<FakeState>>) {
-        let _ = stream.set_read_timeout(Some(Duration::from_secs(1)));
         let Some(request) = read_request(&mut stream) else {
             return;
         };
@@ -2832,6 +2831,11 @@ mod tests {
     }
 
     fn env_lock() -> &'static Mutex<()> {
+        static LOCK: OnceLock<Mutex<()>> = OnceLock::new();
+        LOCK.get_or_init(|| Mutex::new(()))
+    }
+
+    fn http_lock() -> &'static Mutex<()> {
         static LOCK: OnceLock<Mutex<()>> = OnceLock::new();
         LOCK.get_or_init(|| Mutex::new(()))
     }
@@ -3294,6 +3298,7 @@ in_flight_timeout_ms = 444
 
     #[test]
     fn opencode_client_lists_sessions_and_detects_latest() {
+        let _guard = http_lock().lock().unwrap();
         let server = FakeOpenCode::start();
         server.add_session("ses_old", "Old", 10);
         server.add_session("ses_new", "New", 20);
@@ -3305,6 +3310,7 @@ in_flight_timeout_ms = 444
 
     #[test]
     fn opencode_client_message_snapshot_detects_sidecar_user_and_assistant() {
+        let _guard = http_lock().lock().unwrap();
         let server = FakeOpenCode::start();
         server.add_session("ses_msg", "Messages", 1);
         server.set_messages(
@@ -3328,6 +3334,7 @@ in_flight_timeout_ms = 444
 
     #[test]
     fn opencode_client_surfaces_http_and_json_errors() {
+        let _guard = http_lock().lock().unwrap();
         let server = FakeOpenCode::start();
         server.fail_path("/session", 500, "boom");
         assert!(
@@ -3364,6 +3371,7 @@ in_flight_timeout_ms = 444
 
     #[test]
     fn prompt_async_sends_hidden_system_payload_and_handles_failure() {
+        let _guard = http_lock().lock().unwrap();
         let server = FakeOpenCode::start();
         server.add_session("ses_prompt", "Prompt", 1);
         server
@@ -3407,6 +3415,7 @@ in_flight_timeout_ms = 444
 
     #[test]
     fn create_and_delete_session_paths_are_checked() {
+        let _guard = http_lock().lock().unwrap();
         let server = FakeOpenCode::start();
         let session = server.client().create_session().unwrap();
         assert_eq!(session, "ses_created_1");
@@ -3426,6 +3435,7 @@ in_flight_timeout_ms = 444
 
     #[test]
     fn inject_once_waits_for_idle_checks_blockers_and_submits() {
+        let _guard = http_lock().lock().unwrap();
         let server = FakeOpenCode::start();
         server.add_session("ses_inject", "Inject", 1);
         inject_once(
@@ -3457,6 +3467,7 @@ in_flight_timeout_ms = 444
 
     #[test]
     fn wait_until_idle_handles_busy_retry_and_timeout() {
+        let _guard = http_lock().lock().unwrap();
         let server = FakeOpenCode::start();
         server.add_session("ses_busy", "Busy", 1);
         server.set_status("ses_busy", serde_json::json!({ "type": "busy" }));
@@ -3489,6 +3500,7 @@ in_flight_timeout_ms = 444
 
     #[test]
     fn doctor_success_failure_and_skip_paths_are_covered() {
+        let _guard = http_lock().lock().unwrap();
         let server = FakeOpenCode::start();
         server.push_prompt_reply(Some("OPENCODE_GOAL_DOCTOR_OK"));
         let target_dir = test_dir();
@@ -3545,6 +3557,7 @@ in_flight_timeout_ms = 444
 
     #[test]
     fn tick_goal_injects_when_idle_and_records_submitted_injection() {
+        let _guard = http_lock().lock().unwrap();
         let server = FakeOpenCode::start();
         server.add_session("ses_tick", "Tick", 1);
         let store = Store::open(test_db_path()).unwrap();
@@ -3562,6 +3575,7 @@ in_flight_timeout_ms = 444
 
     #[test]
     fn tick_goal_records_failed_prompt_async() {
+        let _guard = http_lock().lock().unwrap();
         let server = FakeOpenCode::start();
         server.add_session("ses_fail_prompt", "Fail", 1);
         server.set_prompt_status(500);
@@ -3579,6 +3593,7 @@ in_flight_timeout_ms = 444
 
     #[test]
     fn tick_goal_marks_complete_from_assistant_marker() {
+        let _guard = http_lock().lock().unwrap();
         let server = FakeOpenCode::start();
         server.add_session("ses_complete", "Complete", 1);
         server.set_messages(
@@ -3600,6 +3615,7 @@ in_flight_timeout_ms = 444
 
     #[test]
     fn tick_goal_waits_on_busy_retry_permission_and_question() {
+        let _guard = http_lock().lock().unwrap();
         let cases = [
             (
                 serde_json::json!({ "type": "busy" }),
@@ -3648,6 +3664,7 @@ in_flight_timeout_ms = 444
 
     #[test]
     fn tick_goal_waits_for_user_authored_message_response() {
+        let _guard = http_lock().lock().unwrap();
         let server = FakeOpenCode::start();
         server.add_session("ses_user", "User", 1);
         server.set_messages("ses_user", vec![user_message("msg_user", "real user", "")]);
@@ -3665,6 +3682,7 @@ in_flight_timeout_ms = 444
 
     #[test]
     fn tick_goal_finishes_non_complete_injection_and_pauses_at_limit() {
+        let _guard = http_lock().lock().unwrap();
         let server = FakeOpenCode::start();
         server.add_session("ses_no_progress", "No progress", 1);
         server.set_messages(
@@ -3703,6 +3721,7 @@ in_flight_timeout_ms = 444
 
     #[test]
     fn tick_goal_pauses_stale_in_flight_continuation() {
+        let _guard = http_lock().lock().unwrap();
         let server = FakeOpenCode::start();
         server.add_session("ses_timeout", "Timeout", 1);
         let store = Store::open(test_db_path()).unwrap();
@@ -3747,6 +3766,7 @@ in_flight_timeout_ms = 444
 
     #[test]
     fn tick_goal_respects_backoff_and_min_injection_interval() {
+        let _guard = http_lock().lock().unwrap();
         let server = FakeOpenCode::start();
         server.add_session("ses_backoff", "Backoff", 1);
         let store = Store::open(test_db_path()).unwrap();
@@ -3787,7 +3807,8 @@ in_flight_timeout_ms = 444
 
     #[test]
     fn run_cli_from_covers_command_lifecycle_branches() {
-        let _guard = env_lock().lock().unwrap();
+        let _http_guard = http_lock().lock().unwrap();
+        let _env_guard = env_lock().lock().unwrap();
         unsafe {
             std::env::remove_var("OPENCODE_GOAL_BASE_URL");
             std::env::remove_var("OPENCODE_GOAL_PROVIDER");
