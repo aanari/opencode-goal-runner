@@ -16,6 +16,15 @@ Completed a deliberate two-continuation run against `opencode serve --hostname 1
 
 `logs --goal goal_55e7e826a9284fe19356d557a18fbc4c --limit 20` showed both injection rows as `completed`, with submitted and completed timestamps and pre/post message IDs.
 
+Completed a later installed `/goal` launch smoke with shell-sensitive objective text and one real continuation injection.
+
+- Goal: `goal_096d3c7ba00e4b1e9e4142b8f0f30fcb`
+- Session: `ses_1eca245a3ffeyIWRNhSuqoR4X2`
+- Final status: `complete`
+- Total injections: `1`
+
+`inspect` preserved literal quotes, `'$HOME'`, backticks, XML-ish text, and multiline objective content. `logs` showed `inj_db5b4d5d2d1c41ffae2970b9b3468bc3` as `completed` with no stuck in-flight injection.
+
 ## What worked
 
 - The installed release binary ran the goal loop without Node.js, Bun, or the OpenCode JS SDK.
