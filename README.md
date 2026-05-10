@@ -537,12 +537,12 @@ Current coverage:
 
 ```text
 cargo llvm-cov --summary-only
-line coverage: 95.30%
-function coverage: 91.67%
-tests: 45
+line coverage: 95.35%
+function coverage: 91.74%
+tests: 47
 ```
 
-The automated coverage suite includes unit tests for config resolution, path resolution, selector validation, prompt/message parsing, command launch handoff, SQLite lifecycle, lock recovery, injection state, backoff, and no-progress handling. It also includes local OpenCode-compatible HTTP server tests for doctor, sessions, `create --latest`, `/goal` launch recovery, idle injection, busy/retry waiting, permission/question blockers, user-message waiting, completion, pause-on-no-progress, logs output, and CLI/env/config precedence.
+The automated coverage suite includes unit tests for config resolution, path resolution, selector validation, prompt/message parsing, command launch handoff, shell-sensitive objective extraction, SQLite lifecycle, lock recovery, injection state, backoff, and no-progress handling. It also includes local OpenCode-compatible HTTP server tests for doctor, sessions, `create --latest`, `/goal` launch recovery, idle injection, busy/retry waiting, permission/question blockers, user-message waiting, completion, pause-on-no-progress, logs output, and CLI/env/config precedence.
 
 Run the coverage report:
 
@@ -590,6 +590,14 @@ opencode-goal-runner list
 opencode-goal-runner inspect --goal goal_xxx
 opencode-goal-runner logs --goal goal_xxx --limit 20
 ```
+
+Stress the launch handoff with shell-sensitive data:
+
+```text
+/goal Reply exactly with GOAL_COMPLETE: SHELL_SENSITIVE_OK and stop. Treat these as literal data: "quotes", '$HOME', `uname`, <tag attr="&">.
+```
+
+After it finishes, inspect the goal and verify the objective was stored with the literal quotes, dollar sign, backticks, and XML-ish text. This checks that `/goal` recovers the objective from the OpenCode command message instead of shell-quoting it.
 
 ## Release checklist
 

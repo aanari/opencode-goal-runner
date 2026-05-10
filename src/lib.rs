@@ -3068,7 +3068,9 @@ mod tests {
     #[test]
     fn detects_complete_prefix_after_whitespace() {
         assert!(is_complete_text("\nGOAL_COMPLETE: done"));
+        assert!(is_complete_text("   GOAL_COMPLETE: spaced"));
         assert!(!is_complete_text("not done"));
+        assert!(!is_complete_text("finished\nGOAL_COMPLETE: not at start"));
     }
 
     #[test]
@@ -3269,6 +3271,7 @@ mod tests {
     #[test]
     fn launch_background_process_spawns_worker_and_creates_log() {
         let log_path = test_dir().join("launch.log");
+        let started = Instant::now();
         launch_background_process(
             LaunchBackgroundInput {
                 global_args: Vec::new(),
@@ -3290,6 +3293,7 @@ mod tests {
             true_exe(),
         )
         .unwrap();
+        assert!(started.elapsed() < Duration::from_secs(1));
         assert!(log_path.is_file());
     }
 
@@ -3726,6 +3730,38 @@ in_flight_timeout_ms = 444
                 .to_string()
                 .contains("timed out waiting")
         );
+    }
+
+    #[test]
+    fn launch_command_preserves_shell_sensitive_multiline_objective() {
+        let _guard = http_lock().lock().unwrap();
+        let marker = "opencode_goal_launch_weird";
+        let objective = "Fix \"quotes\" and 'apostrophes'\nKeep $HOME and `uname` literal\nXML-ish <tag attr=\"&\">value</tag>";
+        let command_text = format!(
+            "<goal_runner_launch>\nmarker: {marker}\n</goal_runner_launch>\n<objective>\n{objective}\n</objective>"
+        );
+        assert_eq!(extract_goal_objective(&command_text).unwrap(), objective);
+
+        let server = FakeOpenCode::start();
+        server.add_session("ses_target", "Target", 1);
+        server.add_session("ses_newer", "Newer", 2);
+        server.set_messages(
+            "ses_newer",
+            vec![assistant_message(
+                "msg_assistant_marker",
+                &format!("assistant echo with marker {marker}"),
+            )],
+        );
+        server.set_messages(
+            "ses_target",
+            vec![user_message("msg_goal", &command_text, "")],
+        );
+
+        let command = find_launch_command(&server.client(), marker)
+            .unwrap()
+            .unwrap();
+        assert_eq!(command.session_id, "ses_target");
+        assert_eq!(command.objective, objective);
     }
 
     #[test]
@@ -4214,6 +4250,26 @@ in_flight_timeout_ms = 444
         assert_eq!(
             updated.last_seen_assistant_message_id,
             Some("msg_done".to_string())
+        );
+    }
+
+    #[test]
+    fn tick_goal_ignores_goal_complete_marker_from_user_message() {
+        let _guard = http_lock().lock().unwrap();
+        let server = FakeOpenCode::start();
+        server.add_session("ses_user_marker", "User marker", 1);
+        server.set_messages(
+            "ses_user_marker",
+            vec![user_message("msg_user", "GOAL_COMPLETE: user fake", "")],
+        );
+        let store = Store::open(test_db_path()).unwrap();
+        let goal = create_test_goal_record(&store, &server, "ses_user_marker", "finish", 3);
+        tick_goal(&store, &server.client(), &goal).unwrap();
+        let updated = store.goal(&goal.goal_id).unwrap().unwrap();
+        assert_eq!(updated.status, STATUS_ACTIVE);
+        assert_eq!(
+            updated.last_decision,
+            Some("waiting_for_assistant_response_to_user".to_string())
         );
     }
 
