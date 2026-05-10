@@ -190,6 +190,8 @@ lock_ttl_ms = 30000
 in_flight_timeout_ms = 600000
 ```
 
+Loop timing and count settings must be greater than zero. The runner rejects zero or negative values instead of spinning, instantly timing out, or creating immediately stale locks.
+
 Precedence is:
 
 ```text
@@ -537,12 +539,12 @@ Current coverage:
 
 ```text
 cargo llvm-cov --summary-only
-line coverage: 95.35%
-function coverage: 91.74%
+line coverage: 95.34%
+function coverage: 91.80%
 tests: 47
 ```
 
-The automated coverage suite includes unit tests for config resolution, path resolution, selector validation, prompt/message parsing, command launch handoff, shell-sensitive objective extraction, SQLite lifecycle, lock recovery, injection state, backoff, and no-progress handling. It also includes local OpenCode-compatible HTTP server tests for doctor, sessions, `create --latest`, `/goal` launch recovery, idle injection, busy/retry waiting, permission/question blockers, user-message waiting, completion, pause-on-no-progress, logs output, and CLI/env/config precedence.
+The automated coverage suite includes unit tests for config resolution, positive loop-setting validation, path resolution, selector validation, prompt/message parsing, command launch handoff, shell-sensitive objective extraction, SQLite lifecycle, lock recovery, injection state, backoff, and no-progress handling. It also includes local OpenCode-compatible HTTP server tests for doctor, sessions, `create --latest`, `/goal` launch recovery, idle injection, busy/retry waiting, permission/question blockers, user-message waiting, completion, pause-on-no-progress, logs output, and CLI/env/config precedence.
 
 Run the coverage report:
 

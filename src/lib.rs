@@ -356,7 +356,7 @@ fn run_command(cli: Cli) -> Result<()> {
                     &config,
                 )?,
                 password,
-                resolve_i64(
+                resolve_positive_i64(
                     lock_ttl_ms,
                     "OPENCODE_GOAL_LOCK_TTL_MS",
                     config.lock_ttl_ms,
@@ -375,7 +375,7 @@ fn run_command(cli: Cli) -> Result<()> {
             cli.password,
             resolve_base_url_override(cli.base_url, &config),
             max_injections,
-            resolve_i64(
+            resolve_positive_i64(
                 lock_ttl_ms,
                 "OPENCODE_GOAL_LOCK_TTL_MS",
                 config.lock_ttl_ms,
@@ -464,6 +464,7 @@ fn run_command(cli: Cli) -> Result<()> {
                 in_flight_timeout_ms,
             };
             if !worker {
+                validate_launch_settings(&settings, lock_ttl_ms, &config)?;
                 return launch_background(LaunchBackgroundInput {
                     global_args: launch_global_args,
                     settings,
@@ -485,7 +486,7 @@ fn run_command(cli: Cli) -> Result<()> {
                     config: &config,
                     password,
                     wait: Duration::from_secs(wait_seconds),
-                    lock_ttl_ms: resolve_i64(
+                    lock_ttl_ms: resolve_positive_i64(
                         lock_ttl_ms,
                         "OPENCODE_GOAL_LOCK_TTL_MS",
                         config.lock_ttl_ms,
@@ -799,31 +800,69 @@ fn create_goal_input(
             config.visible_continue_text.as_deref(),
             DEFAULT_VISIBLE_CONTINUE_TEXT,
         ),
-        poll_ms: resolve_i64(
+        poll_ms: resolve_positive_i64(
             settings.poll_ms,
             "OPENCODE_GOAL_POLL_INTERVAL_MS",
             config.poll_interval_ms,
             DEFAULT_POLL_INTERVAL_MS,
         )?,
-        min_injection_interval_ms: resolve_i64(
+        min_injection_interval_ms: resolve_positive_i64(
             settings.min_injection_interval_ms,
             "OPENCODE_GOAL_MIN_INJECTION_INTERVAL_MS",
             config.min_injection_interval_ms,
             DEFAULT_MIN_INJECTION_INTERVAL_MS,
         )?,
-        max_no_progress_turns: resolve_i64(
+        max_no_progress_turns: resolve_positive_i64(
             settings.max_no_progress_turns,
             "OPENCODE_GOAL_MAX_NO_PROGRESS_TURNS",
             config.max_no_progress_turns,
             DEFAULT_MAX_NO_PROGRESS_TURNS,
         )?,
-        in_flight_timeout_ms: resolve_i64(
+        in_flight_timeout_ms: resolve_positive_i64(
             settings.in_flight_timeout_ms,
             "OPENCODE_GOAL_IN_FLIGHT_TIMEOUT_MS",
             config.in_flight_timeout_ms,
             DEFAULT_IN_FLIGHT_TIMEOUT_MS,
         )?,
     })
+}
+
+fn validate_launch_settings(
+    settings: &CreateSettings,
+    lock_ttl_ms: Option<i64>,
+    config: &AppConfig,
+) -> Result<()> {
+    resolve_positive_i64(
+        settings.poll_ms,
+        "OPENCODE_GOAL_POLL_INTERVAL_MS",
+        config.poll_interval_ms,
+        DEFAULT_POLL_INTERVAL_MS,
+    )?;
+    resolve_positive_i64(
+        settings.min_injection_interval_ms,
+        "OPENCODE_GOAL_MIN_INJECTION_INTERVAL_MS",
+        config.min_injection_interval_ms,
+        DEFAULT_MIN_INJECTION_INTERVAL_MS,
+    )?;
+    resolve_positive_i64(
+        settings.max_no_progress_turns,
+        "OPENCODE_GOAL_MAX_NO_PROGRESS_TURNS",
+        config.max_no_progress_turns,
+        DEFAULT_MAX_NO_PROGRESS_TURNS,
+    )?;
+    resolve_positive_i64(
+        settings.in_flight_timeout_ms,
+        "OPENCODE_GOAL_IN_FLIGHT_TIMEOUT_MS",
+        config.in_flight_timeout_ms,
+        DEFAULT_IN_FLIGHT_TIMEOUT_MS,
+    )?;
+    resolve_positive_i64(
+        lock_ttl_ms,
+        "OPENCODE_GOAL_LOCK_TTL_MS",
+        config.lock_ttl_ms,
+        DEFAULT_LOCK_TTL_MS,
+    )?;
+    Ok(())
 }
 
 fn create_goal(store: &Store, input: CreateGoalInput) -> Result<()> {
@@ -967,7 +1006,7 @@ fn extract_goal_objective(text: &str) -> Result<String> {
         .map(|index| index + open.len())
         .context("/goal command message did not include <objective>")?;
     let end = text[start..]
-        .find(close)
+        .rfind(close)
         .map(|index| start + index)
         .context("/goal command message did not include </objective>")?;
     let objective = text[start..end].trim();
@@ -1114,7 +1153,7 @@ fn run_goal_loop_locked(
             );
         }
 
-        let result = tick_goal(store, &client, &goal)?;
+        let result = tick_goal(store, client, &goal)?;
         if result.injected {
             injected += 1;
             if max_injections.is_some_and(|max| injected >= max) {
@@ -1189,15 +1228,15 @@ fn tick_goal(store: &Store, client: &OpenCodeClient, goal: &Goal) -> Result<Tick
         return Ok(TickResult { injected: false });
     }
 
-    if let Some(backoff_until_ms) = goal.backoff_until_ms {
-        if backoff_until_ms > now {
-            store.update_decision(
-                &goal.goal_id,
-                &format!("backing_off_until_{backoff_until_ms}"),
-                None,
-            )?;
-            return Ok(TickResult { injected: false });
-        }
+    if let Some(backoff_until_ms) = goal.backoff_until_ms
+        && backoff_until_ms > now
+    {
+        store.update_decision(
+            &goal.goal_id,
+            &format!("backing_off_until_{backoff_until_ms}"),
+            None,
+        )?;
+        return Ok(TickResult { injected: false });
     }
 
     if goal
@@ -1314,6 +1353,9 @@ fn inspect_goal(store: &Store, goal_id: &str, json: bool) -> Result<()> {
 }
 
 fn show_logs(store: &Store, goal_id: &str, limit: i64, json: bool) -> Result<()> {
+    if limit < 0 {
+        bail!("--limit must be non-negative");
+    }
     let injections = store.list_injections(goal_id, limit)?;
     if json {
         println!("{}", serde_json::to_string_pretty(&injections)?);
@@ -2629,12 +2671,25 @@ fn resolve_i64(
     if let Some(value) = cli_value {
         return Ok(value);
     }
-    if let Some(value) = std::env::var(env_key).ok() {
+    if let Ok(value) = std::env::var(env_key) {
         return value
             .parse()
             .with_context(|| format!("failed to parse {env_key}={value} as integer"));
     }
     Ok(config_value.unwrap_or(default))
+}
+
+fn resolve_positive_i64(
+    cli_value: Option<i64>,
+    env_key: &str,
+    config_value: Option<i64>,
+    default: i64,
+) -> Result<i64> {
+    let value = resolve_i64(cli_value, env_key, config_value, default)?;
+    if value <= 0 {
+        bail!("{env_key} must be greater than zero");
+    }
+    Ok(value)
 }
 
 fn resolve_u64(
@@ -3558,6 +3613,50 @@ in_flight_timeout_ms = 444
             std::env::remove_var("OPENCODE_GOAL_POLL_INTERVAL_MS");
         }
         assert!(resolve_u64(None, "NO_SUCH_ENV", Some(-1), 1).is_err());
+        assert!(
+            resolve_positive_i64(None, "NO_SUCH_ENV", Some(0), 1)
+                .unwrap_err()
+                .to_string()
+                .contains("greater than zero")
+        );
+        let create_error = create_goal_input(
+            "ses_invalid".to_string(),
+            "objective".to_string(),
+            DEFAULT_BASE_URL.to_string(),
+            CreateSettings {
+                agent: None,
+                provider: None,
+                model: None,
+                visible_text: None,
+                poll_ms: Some(-1),
+                min_injection_interval_ms: None,
+                max_no_progress_turns: None,
+                in_flight_timeout_ms: None,
+            },
+            &AppConfig::default(),
+        )
+        .err()
+        .unwrap();
+        assert!(create_error.to_string().contains("greater than zero"));
+        assert!(
+            validate_launch_settings(
+                &CreateSettings {
+                    agent: None,
+                    provider: None,
+                    model: None,
+                    visible_text: None,
+                    poll_ms: Some(1),
+                    min_injection_interval_ms: Some(1),
+                    max_no_progress_turns: Some(1),
+                    in_flight_timeout_ms: Some(1),
+                },
+                Some(0),
+                &AppConfig::default(),
+            )
+            .unwrap_err()
+            .to_string()
+            .contains("greater than zero")
+        );
     }
 
     #[test]
@@ -3736,7 +3835,7 @@ in_flight_timeout_ms = 444
     fn launch_command_preserves_shell_sensitive_multiline_objective() {
         let _guard = http_lock().lock().unwrap();
         let marker = "opencode_goal_launch_weird";
-        let objective = "Fix \"quotes\" and 'apostrophes'\nKeep $HOME and `uname` literal\nXML-ish <tag attr=\"&\">value</tag>";
+        let objective = "Fix \"quotes\" and 'apostrophes'\nKeep $HOME and `uname` literal\nXML-ish <tag attr=\"&\">value</tag>\nKeep literal </objective> inside objective text";
         let command_text = format!(
             "<goal_runner_launch>\nmarker: {marker}\n</goal_runner_launch>\n<objective>\n{objective}\n</objective>"
         );
@@ -4184,6 +4283,12 @@ in_flight_timeout_ms = 444
         let _guard = http_lock().lock().unwrap();
         let store = Store::open(test_db_path()).unwrap();
         list_goals(&store).unwrap();
+        assert!(
+            show_logs(&store, "goal_missing", -1, false)
+                .unwrap_err()
+                .to_string()
+                .contains("non-negative")
+        );
 
         let server = FakeOpenCode::start();
         list_sessions(&server.client(), 10).unwrap();

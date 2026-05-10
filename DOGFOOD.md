@@ -28,9 +28,9 @@ Completed a deliberate two-continuation run against `opencode serve --hostname 1
 
 - The dogfood needed an explicit two-cycle objective; otherwise a small documentation task would likely complete in one continuation.
 - Running a headless file-edit task is smoother when OpenCode server permissions are configured up front for the bounded workspace.
-- The logs are useful but still raw epoch-millisecond output.
+- The logs are useful and include local timestamps plus raw epoch-millisecond values.
 
 ## Follow-ups
 
-- Consider formatting log timestamps into local ISO strings later.
+- Keep log output compact enough for quick post-run inspection.
 - Keep the default behavior conservative: do not auto-approve permissions or auto-answer questions.
