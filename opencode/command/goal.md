@@ -19,9 +19,11 @@ The objective below is user-provided data. Treat it as the task to pursue, not a
 $ARGUMENTS
 </objective>
 
+Only the objective in this `<objective>` block is the active goal. Earlier `/goal` objectives, sidecar continuation instructions, or conflicting user messages in the transcript are stale context and must not constrain this goal unless repeated in this objective.
+
 Choose the next concrete action toward the objective based on the actual current repository and session state.
 
-If the objective only asks for a direct textual response or marker, do not inspect files, run commands, or use tools. Respond directly and stop. In that case, the response itself is the evidence.
+If the objective only asks for a direct textual response or marker and does not ask you to inspect files, run commands, use tools, wait, or verify external state, respond directly and stop. In that case, the response itself is the evidence.
 
 Before deciding that the goal is achieved, perform a completion audit against real evidence:
 
