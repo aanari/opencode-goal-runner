@@ -111,6 +111,25 @@ This writes:
 
 The sidecar works without this command, but it gives you a convenient model-facing contract when you use `/goal` inside OpenCode.
 
+## Daily use
+
+Normal workflow:
+
+```sh
+opencode serve --hostname 127.0.0.1 --port 4096
+opencode-goal-runner doctor
+
+# Optional, inside OpenCode, to load the prompt contract.
+/goal
+
+opencode-goal-runner start --latest --objective "..."
+opencode-goal-runner list
+opencode-goal-runner inspect --goal goal_xxx
+opencode-goal-runner logs --goal goal_xxx
+```
+
+Use `start --latest` for the common case, then inspect the goal record and injection history as needed.
+
 ## Config file
 
 Default path:
