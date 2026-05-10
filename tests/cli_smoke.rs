@@ -19,8 +19,6 @@ fn cli_uses_env_over_config_against_local_server() {
         .arg(&config)
         .arg("doctor")
         .arg("--skip-model-check")
-        .arg("--target-dir")
-        .arg(std::env::temp_dir())
         .env("OPENCODE_GOAL_BASE_URL", &server.base_url)
         .output()
         .unwrap();

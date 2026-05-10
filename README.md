@@ -14,7 +14,7 @@ Implemented:
 - direct OpenCode HTTP client
 - SQLite goal store under `~/.config/opencode-goal-runner/goals.sqlite3` by default
 - config file support at `~/.config/opencode-goal-runner/config.toml`
-- `start`, `create`, `run`, `pause`, `resume`, `clear`, `inspect`, `logs`, `list`, `sessions`, `doctor`, `install-opencode-command`, and `inject-once`
+- `start`, `create`, `run`, `pause`, `resume`, `clear`, `inspect`, `logs`, `list`, `sessions`, `doctor`, and `inject-once`
 - idle polling through `GET /session/status`
 - pending permission and question blocker checks
 - async continuation injection through `POST /session/{sessionID}/prompt_async`
@@ -24,8 +24,8 @@ Implemented:
 - restart-safe in-flight continuation recovery
 - no-progress backoff and pause protection
 - completion detection when an assistant response starts with `GOAL_COMPLETE:`
-- optional self-contained `/goal` command installer
-- `doctor` diagnostics for server reachability, API endpoints, model behavior, and `/goal` command installation
+- copyable self-contained `/goal` command template at `opencode/command/goal.md`
+- `doctor` diagnostics for server reachability, API endpoints, and model behavior
 
 Known limitations:
 
@@ -68,7 +68,7 @@ cargo build --release
 ./target/release/opencode-goal-runner --version
 ```
 
-Uninstall only the installed command:
+Uninstall the installed binary:
 
 ```sh
 ./install.sh --uninstall
@@ -129,16 +129,11 @@ OPENCODE_SERVER_PASSWORD=... opencode serve --hostname 127.0.0.1 --port 4096
 OPENCODE_GOAL_PASSWORD=... opencode-goal-runner doctor
 ```
 
-Install the optional OpenCode `/goal` command:
+Optionally copy the OpenCode `/goal` command into your OpenCode config:
 
 ```sh
-opencode-goal-runner install-opencode-command
-```
-
-This writes:
-
-```text
-~/.config/opencode/command/goal.md
+mkdir -p ~/.config/opencode/command
+cp ./opencode/command/goal.md ~/.config/opencode/command/goal.md
 ```
 
 The sidecar works without this command, but it gives you a convenient model-facing contract when you use `/goal` inside OpenCode.
@@ -256,17 +251,15 @@ It checks:
 - OpenCode server reachability
 - `/session`, `/session/status`, `/permission`, and `/question`
 - selected model behavior unless `--skip-model-check` is passed
-- optional `/goal` command installation
 
 Useful variants:
 
 ```sh
 opencode-goal-runner doctor --provider openai --model gpt-5.4-mini
 opencode-goal-runner doctor --skip-model-check
-opencode-goal-runner doctor --target-dir /tmp/opencode-config
 ```
 
-`doctor` prints warnings for model or `/goal` command problems where the HTTP server itself is still usable.
+`doctor` prints warnings for model problems where the HTTP server itself is still usable.
 
 ## Starting a goal
 
@@ -512,10 +505,11 @@ It intentionally does not import the OpenCode JS SDK at runtime.
 
 ## OpenCode command
 
-The optional `/goal` command starts a session with the same goal contract that the sidecar injects on continuations. It does not run the sidecar by itself.
+The optional `/goal` command starts a session with the same goal contract that the sidecar injects on continuations. It does not run the sidecar by itself, and the binary intentionally does not install or manage this file.
 
 ```sh
-opencode-goal-runner install-opencode-command
+mkdir -p ~/.config/opencode/command
+cp ./opencode/command/goal.md ~/.config/opencode/command/goal.md
 ```
 
 Inside OpenCode:
@@ -543,8 +537,8 @@ Current coverage:
 
 ```text
 cargo llvm-cov --summary-only
-line coverage: 95.33%
-function coverage: 92.82%
+line coverage: 95.42%
+function coverage: 93.56%
 tests: 38
 ```
 
