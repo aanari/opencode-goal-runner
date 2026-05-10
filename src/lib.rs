@@ -1,5 +1,6 @@
-use std::fs;
+use std::fs::{self, OpenOptions};
 use std::path::PathBuf;
+use std::process::{Command as StdCommand, Stdio};
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 use anyhow::{Context, Result, bail};
@@ -33,7 +34,9 @@ const INJECTION_FAILED: &str = "failed";
 const DEFAULT_LOCK_TTL_MS: i64 = 30_000;
 const DEFAULT_MAX_NO_PROGRESS_TURNS: i64 = 3;
 const DEFAULT_IN_FLIGHT_TIMEOUT_MS: i64 = 600_000;
+const DEFAULT_LAUNCH_WAIT_SECONDS: u64 = 60;
 const MAX_BACKOFF_MS: i64 = 30_000;
+const LAUNCH_MARKER_PREFIX: &str = "opencode_goal_launch_";
 #[derive(Parser)]
 #[command(version, about = "External goal runner for OpenCode")]
 struct Cli {
@@ -203,6 +206,43 @@ enum Command {
         #[arg(long, default_value_t = 60)]
         timeout_seconds: u64,
     },
+    Launch {
+        #[arg(long)]
+        agent: Option<String>,
+
+        #[arg(long)]
+        provider: Option<String>,
+
+        #[arg(long)]
+        model: Option<String>,
+
+        #[arg(long)]
+        visible_text: Option<String>,
+
+        #[arg(long)]
+        poll_ms: Option<i64>,
+
+        #[arg(long)]
+        min_injection_interval_ms: Option<i64>,
+
+        #[arg(long)]
+        max_no_progress_turns: Option<i64>,
+
+        #[arg(long)]
+        in_flight_timeout_ms: Option<i64>,
+
+        #[arg(long)]
+        lock_ttl_ms: Option<i64>,
+
+        #[arg(long, default_value_t = DEFAULT_LAUNCH_WAIT_SECONDS)]
+        wait_seconds: u64,
+
+        #[arg(long, hide = true)]
+        marker: Option<String>,
+
+        #[arg(long, hide = true)]
+        worker: bool,
+    },
     InjectOnce {
         #[arg(long)]
         session: String,
@@ -245,6 +285,7 @@ where
 
 fn run_command(cli: Cli) -> Result<()> {
     let config = AppConfig::load(&resolve_config_path(cli.config.clone())?)?;
+    let launch_global_args = launch_global_args(&cli);
     match cli.command {
         Command::Create {
             session,
@@ -398,6 +439,61 @@ fn run_command(cli: Cli) -> Result<()> {
                 timeout: Duration::from_secs(timeout_seconds),
             },
         ),
+        Command::Launch {
+            agent,
+            provider,
+            model,
+            visible_text,
+            poll_ms,
+            min_injection_interval_ms,
+            max_no_progress_turns,
+            in_flight_timeout_ms,
+            lock_ttl_ms,
+            wait_seconds,
+            marker,
+            worker,
+        } => {
+            let settings = CreateSettings {
+                agent,
+                provider,
+                model,
+                visible_text,
+                poll_ms,
+                min_injection_interval_ms,
+                max_no_progress_turns,
+                in_flight_timeout_ms,
+            };
+            if !worker {
+                return launch_background(LaunchBackgroundInput {
+                    global_args: launch_global_args,
+                    settings,
+                    lock_ttl_ms,
+                    wait_seconds,
+                });
+            }
+
+            let marker = marker.context("launch worker requires --marker")?;
+            let base_url = resolve_base_url(cli.base_url, &config);
+            let password = cli.password;
+            run_launch_worker(
+                &Store::open(resolve_db_path(cli.db)?)?,
+                &OpenCodeClient::new(base_url.clone(), password.clone())?,
+                LaunchWorkerInput {
+                    marker: &marker,
+                    base_url,
+                    settings,
+                    config: &config,
+                    password,
+                    wait: Duration::from_secs(wait_seconds),
+                    lock_ttl_ms: resolve_i64(
+                        lock_ttl_ms,
+                        "OPENCODE_GOAL_LOCK_TTL_MS",
+                        config.lock_ttl_ms,
+                        DEFAULT_LOCK_TTL_MS,
+                    )?,
+                },
+            )
+        }
         Command::InjectOnce {
             session,
             objective,
@@ -478,6 +574,30 @@ struct CreateSettings {
     min_injection_interval_ms: Option<i64>,
     max_no_progress_turns: Option<i64>,
     in_flight_timeout_ms: Option<i64>,
+}
+
+struct LaunchBackgroundInput {
+    global_args: Vec<String>,
+    settings: CreateSettings,
+    lock_ttl_ms: Option<i64>,
+    wait_seconds: u64,
+}
+
+struct LaunchWorkerInput<'a> {
+    marker: &'a str,
+    base_url: String,
+    settings: CreateSettings,
+    config: &'a AppConfig,
+    password: Option<String>,
+    wait: Duration,
+    lock_ttl_ms: i64,
+}
+
+#[derive(Debug)]
+struct LaunchCommandMessage {
+    session_id: String,
+    message_id: Option<String>,
+    objective: String,
 }
 
 struct DoctorInput {
@@ -713,6 +833,148 @@ fn create_goal(store: &Store, input: CreateGoalInput) -> Result<()> {
     println!("status {}", goal.status);
     println!("run with: opencode-goal-runner run --goal {}", goal.goal_id);
     Ok(())
+}
+
+fn launch_background(input: LaunchBackgroundInput) -> Result<()> {
+    let marker = format!("{LAUNCH_MARKER_PREFIX}{}", Uuid::new_v4().simple());
+    let log_path = resolve_launch_log_path()?;
+    launch_background_process(
+        input,
+        marker,
+        log_path,
+        std::env::current_exe().context("failed to resolve current executable")?,
+    )
+}
+
+fn launch_background_process(
+    input: LaunchBackgroundInput,
+    marker: String,
+    log_path: PathBuf,
+    exe: PathBuf,
+) -> Result<()> {
+    if let Some(parent) = log_path.parent() {
+        fs::create_dir_all(parent)
+            .with_context(|| format!("failed to create {}", parent.display()))?;
+    }
+    let stdout = OpenOptions::new()
+        .create(true)
+        .append(true)
+        .open(&log_path)
+        .with_context(|| format!("failed to open launch log {}", log_path.display()))?;
+    let stderr = stdout
+        .try_clone()
+        .with_context(|| format!("failed to clone launch log {}", log_path.display()))?;
+
+    StdCommand::new(exe)
+        .args(launch_worker_args(&marker, input))
+        .stdin(Stdio::null())
+        .stdout(Stdio::from(stdout))
+        .stderr(Stdio::from(stderr))
+        .spawn()
+        .context("failed to spawn opencode-goal-runner launch worker")?;
+
+    println!("marker: {marker}");
+    println!("status: background runner launch requested");
+    println!("log: {}", log_path.display());
+    Ok(())
+}
+
+fn run_launch_worker(
+    store: &Store,
+    client: &OpenCodeClient,
+    input: LaunchWorkerInput<'_>,
+) -> Result<()> {
+    println!(
+        "waiting up to {}s for /goal command marker {}",
+        input.wait.as_secs(),
+        input.marker
+    );
+    let command = wait_for_launch_command(client, input.marker, input.wait)?;
+    println!(
+        "found /goal command in session {} message {}",
+        command.session_id,
+        command.message_id.as_deref().unwrap_or("unknown")
+    );
+    let goal = create_goal_record(
+        store,
+        create_goal_input(
+            command.session_id,
+            command.objective,
+            input.base_url.clone(),
+            input.settings,
+            input.config,
+        )?,
+    )?;
+    println!("created goal {}", goal.goal_id);
+    run_goal_loop(
+        store,
+        GoalSelector {
+            goal: Some(goal.goal_id),
+            session: None,
+        },
+        input.password,
+        Some(input.base_url),
+        None,
+        input.lock_ttl_ms,
+    )
+}
+
+fn wait_for_launch_command(
+    client: &OpenCodeClient,
+    marker: &str,
+    timeout: Duration,
+) -> Result<LaunchCommandMessage> {
+    let start = Instant::now();
+    loop {
+        if let Some(command) = find_launch_command(client, marker)? {
+            return Ok(command);
+        }
+        if start.elapsed() >= timeout {
+            bail!("timed out waiting for /goal command marker {marker}");
+        }
+        std::thread::sleep(Duration::from_millis(250));
+    }
+}
+
+fn find_launch_command(
+    client: &OpenCodeClient,
+    marker: &str,
+) -> Result<Option<LaunchCommandMessage>> {
+    for session in client.sessions()? {
+        for message in client.messages(&session.id)?.iter().rev() {
+            if message_role(message) != Some("user") {
+                continue;
+            }
+            let text = message_text(message);
+            if !text.contains(marker) {
+                continue;
+            }
+            return Ok(Some(LaunchCommandMessage {
+                session_id: session.id,
+                message_id: message_id(message).map(str::to_string),
+                objective: extract_goal_objective(&text)?,
+            }));
+        }
+    }
+    Ok(None)
+}
+
+fn extract_goal_objective(text: &str) -> Result<String> {
+    let open = "<objective>";
+    let close = "</objective>";
+    let start = text
+        .find(open)
+        .map(|index| index + open.len())
+        .context("/goal command message did not include <objective>")?;
+    let end = text[start..]
+        .find(close)
+        .map(|index| start + index)
+        .context("/goal command message did not include </objective>")?;
+    let objective = text[start..end].trim();
+    if objective.is_empty() {
+        bail!("/goal objective is empty");
+    }
+    Ok(objective.to_string())
 }
 
 fn start_goal(
@@ -2002,10 +2264,7 @@ impl OpenCodeClient {
     }
 
     fn message_snapshot(&self, session: &str) -> Result<MessageSnapshot> {
-        let value: Value = self.get_json(&format!("/session/{session}/message"))?;
-        let Some(items) = value.as_array() else {
-            bail!("/session/{session}/message did not return an array");
-        };
+        let items = self.messages(session)?;
         let latest = items.last();
         let latest_role = latest.and_then(message_role).map(str::to_string);
         let latest_user_is_sidecar = latest_role.as_deref() == Some("user")
@@ -2030,6 +2289,14 @@ impl OpenCodeClient {
                 .filter(|message| message_role(message) == Some("assistant"))
                 .count() as i64,
         })
+    }
+
+    fn messages(&self, session: &str) -> Result<Vec<Value>> {
+        let value: Value = self.get_json(&format!("/session/{session}/message"))?;
+        let Some(items) = value.as_array() else {
+            bail!("/session/{session}/message did not return an array");
+        };
+        Ok(items.clone())
     }
 
     fn prompt_async(&self, input: PromptAsyncRequest<'_>) -> Result<()> {
@@ -2266,6 +2533,81 @@ fn resolve_base_url_override(base_url: Option<String>, config: &AppConfig) -> Op
         .or_else(|| config.base_url.clone())
 }
 
+fn launch_global_args(cli: &Cli) -> Vec<String> {
+    let mut args = Vec::new();
+    append_child_arg(&mut args, "--base-url", cli.base_url.clone());
+    append_child_arg(&mut args, "--password", cli.password.clone());
+    append_child_arg(
+        &mut args,
+        "--db",
+        cli.db.as_ref().map(|path| path.display().to_string()),
+    );
+    append_child_arg(
+        &mut args,
+        "--config",
+        cli.config.as_ref().map(|path| path.display().to_string()),
+    );
+    args
+}
+
+fn launch_worker_args(marker: &str, input: LaunchBackgroundInput) -> Vec<String> {
+    let mut args = input.global_args;
+    args.push("launch".to_string());
+    args.push("--worker".to_string());
+    append_child_arg(&mut args, "--marker", Some(marker.to_string()));
+    append_child_arg(
+        &mut args,
+        "--wait-seconds",
+        Some(input.wait_seconds.to_string()),
+    );
+    append_child_arg(&mut args, "--agent", input.settings.agent);
+    append_child_arg(&mut args, "--provider", input.settings.provider);
+    append_child_arg(&mut args, "--model", input.settings.model);
+    append_child_arg(&mut args, "--visible-text", input.settings.visible_text);
+    append_child_arg(
+        &mut args,
+        "--poll-ms",
+        input.settings.poll_ms.map(|value| value.to_string()),
+    );
+    append_child_arg(
+        &mut args,
+        "--min-injection-interval-ms",
+        input
+            .settings
+            .min_injection_interval_ms
+            .map(|value| value.to_string()),
+    );
+    append_child_arg(
+        &mut args,
+        "--max-no-progress-turns",
+        input
+            .settings
+            .max_no_progress_turns
+            .map(|value| value.to_string()),
+    );
+    append_child_arg(
+        &mut args,
+        "--in-flight-timeout-ms",
+        input
+            .settings
+            .in_flight_timeout_ms
+            .map(|value| value.to_string()),
+    );
+    append_child_arg(
+        &mut args,
+        "--lock-ttl-ms",
+        input.lock_ttl_ms.map(|value| value.to_string()),
+    );
+    args
+}
+
+fn append_child_arg(args: &mut Vec<String>, flag: &str, value: Option<String>) {
+    if let Some(value) = value {
+        args.push(flag.to_string());
+        args.push(value);
+    }
+}
+
 fn resolve_string(
     cli_value: Option<String>,
     env_key: &str,
@@ -2322,6 +2664,14 @@ fn resolve_db_path(path: Option<PathBuf>) -> Result<PathBuf> {
         .or_else(|| std::env::var_os("HOME").map(|home| PathBuf::from(home).join(".config")))
         .context("set OPENCODE_GOAL_DB or HOME")?;
     Ok(base.join("opencode-goal-runner").join("goals.sqlite3"))
+}
+
+fn resolve_launch_log_path() -> Result<PathBuf> {
+    let base = std::env::var_os("XDG_CONFIG_HOME")
+        .map(PathBuf::from)
+        .or_else(|| std::env::var_os("HOME").map(|home| PathBuf::from(home).join(".config")))
+        .context("set HOME")?;
+    Ok(base.join("opencode-goal-runner").join("launch.log"))
 }
 
 fn resolve_config_path(path: Option<PathBuf>) -> Result<PathBuf> {
@@ -2857,6 +3207,93 @@ mod tests {
     }
 
     #[test]
+    fn parses_launch_cli_and_builds_worker_args() {
+        let cli = Cli::try_parse_from([
+            "opencode-goal-runner",
+            "--db",
+            "/tmp/goals.sqlite3",
+            "launch",
+            "--agent",
+            "build",
+            "--wait-seconds",
+            "7",
+            "--worker",
+            "--marker",
+            "opencode_goal_launch_test",
+        ])
+        .unwrap();
+        assert_eq!(
+            launch_global_args(&cli),
+            vec!["--db".to_string(), "/tmp/goals.sqlite3".to_string(),]
+        );
+        match cli.command {
+            Command::Launch {
+                agent,
+                wait_seconds,
+                marker,
+                worker,
+                ..
+            } => {
+                assert_eq!(agent, Some("build".to_string()));
+                assert_eq!(wait_seconds, 7);
+                assert_eq!(marker, Some("opencode_goal_launch_test".to_string()));
+                assert!(worker);
+            }
+            _ => panic!("expected launch command"),
+        }
+
+        let args = launch_worker_args(
+            "opencode_goal_launch_test",
+            LaunchBackgroundInput {
+                global_args: vec!["--db".to_string(), "/tmp/goals.sqlite3".to_string()],
+                settings: CreateSettings {
+                    agent: Some("build".to_string()),
+                    provider: None,
+                    model: None,
+                    visible_text: Some("continue".to_string()),
+                    poll_ms: Some(1),
+                    min_injection_interval_ms: None,
+                    max_no_progress_turns: None,
+                    in_flight_timeout_ms: None,
+                },
+                lock_ttl_ms: Some(9),
+                wait_seconds: 7,
+            },
+        );
+        assert!(args.windows(2).any(|item| item == ["--worker", "--marker"]));
+        assert!(args.windows(2).any(|item| item == ["--wait-seconds", "7"]));
+        assert!(args.windows(2).any(|item| item == ["--poll-ms", "1"]));
+        assert!(args.windows(2).any(|item| item == ["--lock-ttl-ms", "9"]));
+    }
+
+    #[test]
+    fn launch_background_process_spawns_worker_and_creates_log() {
+        let log_path = test_dir().join("launch.log");
+        launch_background_process(
+            LaunchBackgroundInput {
+                global_args: Vec::new(),
+                settings: CreateSettings {
+                    agent: None,
+                    provider: None,
+                    model: None,
+                    visible_text: None,
+                    poll_ms: None,
+                    min_injection_interval_ms: None,
+                    max_no_progress_turns: None,
+                    in_flight_timeout_ms: None,
+                },
+                lock_ttl_ms: None,
+                wait_seconds: 1,
+            },
+            "opencode_goal_launch_spawn_test".to_string(),
+            log_path.clone(),
+            true_exe(),
+        )
+        .unwrap();
+        assert!(log_path.is_file());
+    }
+
+    #[test]
     fn parses_logs_cli() {
         let cli = Cli::try_parse_from([
             "opencode-goal-runner",
@@ -2954,6 +3391,55 @@ in_flight_timeout_ms = 444
         assert_eq!(input.min_injection_interval_ms, 2);
         assert_eq!(input.max_no_progress_turns, 3);
         assert_eq!(input.in_flight_timeout_ms, 4);
+    }
+
+    #[test]
+    fn create_goal_input_defaults_and_launch_log_path_are_covered() {
+        let _guard = env_lock().lock().unwrap();
+        unsafe {
+            std::env::set_var("HOME", "/tmp/opencode-goal-runner-home");
+            std::env::remove_var("XDG_CONFIG_HOME");
+            std::env::remove_var("OPENCODE_GOAL_AGENT");
+            std::env::remove_var("OPENCODE_GOAL_PROVIDER");
+            std::env::remove_var("OPENCODE_GOAL_MODEL");
+            std::env::remove_var("OPENCODE_GOAL_VISIBLE_CONTINUE_TEXT");
+            std::env::remove_var("OPENCODE_GOAL_POLL_INTERVAL_MS");
+            std::env::remove_var("OPENCODE_GOAL_MIN_INJECTION_INTERVAL_MS");
+            std::env::remove_var("OPENCODE_GOAL_MAX_NO_PROGRESS_TURNS");
+            std::env::remove_var("OPENCODE_GOAL_IN_FLIGHT_TIMEOUT_MS");
+        }
+        let input = create_goal_input(
+            "ses_default".to_string(),
+            "objective".to_string(),
+            DEFAULT_BASE_URL.to_string(),
+            CreateSettings {
+                agent: None,
+                provider: None,
+                model: None,
+                visible_text: None,
+                poll_ms: None,
+                min_injection_interval_ms: None,
+                max_no_progress_turns: None,
+                in_flight_timeout_ms: None,
+            },
+            &AppConfig::default(),
+        )
+        .unwrap();
+        assert_eq!(input.agent, DEFAULT_AGENT);
+        assert_eq!(input.provider, DEFAULT_PROVIDER);
+        assert_eq!(input.model, DEFAULT_MODEL);
+        assert_eq!(input.visible_text, DEFAULT_VISIBLE_CONTINUE_TEXT);
+        assert_eq!(input.poll_ms, DEFAULT_POLL_INTERVAL_MS);
+        assert_eq!(
+            input.min_injection_interval_ms,
+            DEFAULT_MIN_INJECTION_INTERVAL_MS
+        );
+        assert_eq!(input.max_no_progress_turns, DEFAULT_MAX_NO_PROGRESS_TURNS);
+        assert_eq!(input.in_flight_timeout_ms, DEFAULT_IN_FLIGHT_TIMEOUT_MS);
+        assert_eq!(
+            resolve_launch_log_path().unwrap(),
+            PathBuf::from("/tmp/opencode-goal-runner-home/.config/opencode-goal-runner/launch.log")
+        );
     }
 
     #[test]
@@ -3152,6 +3638,15 @@ in_flight_timeout_ms = 444
     }
 
     #[test]
+    fn command_template_launches_runner_without_shell_quoting_objective() {
+        let template = include_str!("../opencode/command/goal.md");
+        assert!(template.contains("opencode-goal-runner launch"));
+        assert!(template.contains("<goal_runner_launch>"));
+        assert!(template.contains("<objective>\n$ARGUMENTS\n</objective>"));
+        assert!(!template.contains("start --latest --objective"));
+    }
+
+    #[test]
     fn opencode_client_lists_sessions_and_detects_latest() {
         let _guard = http_lock().lock().unwrap();
         let server = FakeOpenCode::start();
@@ -3185,6 +3680,155 @@ in_flight_timeout_ms = 444
         );
         assert_eq!(snapshot.latest_assistant_text, Some("first".to_string()));
         assert_eq!(snapshot.assistant_count, 1);
+    }
+
+    #[test]
+    fn launch_command_finds_marker_and_extracts_objective() {
+        let _guard = http_lock().lock().unwrap();
+        let marker = "opencode_goal_launch_test";
+        let server = FakeOpenCode::start();
+        server.add_session("ses_old", "Old", 1);
+        server.add_session("ses_goal", "Goal", 2);
+        server.add_session("ses_newer", "Newer", 3);
+        server.set_messages("ses_old", vec![user_message("msg_old", "markerless", "")]);
+        server.set_messages(
+            "ses_newer",
+            vec![user_message("msg_newer", "also markerless", "")],
+        );
+        server.set_messages(
+            "ses_goal",
+            vec![user_message(
+                "msg_goal",
+                &format!(
+                    "<goal_runner_launch>\nmarker: {marker}\n</goal_runner_launch>\n<objective>\nFix docs\n</objective>"
+                ),
+                "",
+            )],
+        );
+
+        let command = find_launch_command(&server.client(), marker)
+            .unwrap()
+            .unwrap();
+        assert_eq!(command.session_id, "ses_goal");
+        assert_eq!(command.message_id, Some("msg_goal".to_string()));
+        assert_eq!(command.objective, "Fix docs");
+        assert_eq!(
+            extract_goal_objective("<objective>\nDo work\n</objective>").unwrap(),
+            "Do work"
+        );
+        assert!(extract_goal_objective("missing open</objective>").is_err());
+        assert!(extract_goal_objective("<objective>missing close").is_err());
+        assert!(extract_goal_objective("<objective>\n\n</objective>").is_err());
+
+        assert!(
+            wait_for_launch_command(&server.client(), "missing_marker", Duration::from_millis(0))
+                .unwrap_err()
+                .to_string()
+                .contains("timed out waiting")
+        );
+    }
+
+    #[test]
+    fn launch_worker_creates_goal_from_opencode_command_message() {
+        let _guard = http_lock().lock().unwrap();
+        let marker = "opencode_goal_launch_worker_test";
+        let server = FakeOpenCode::start();
+        server.add_session("ses_launch", "Launch", 1);
+        server.set_messages(
+            "ses_launch",
+            vec![
+                user_message(
+                    "msg_goal",
+                    &format!(
+                        "<goal_runner_launch>\nmarker: {marker}\n</goal_runner_launch>\n<objective>\nFinish launch\n</objective>"
+                    ),
+                    "",
+                ),
+                assistant_message("msg_done", "GOAL_COMPLETE: launch done"),
+            ],
+        );
+        let store = Store::open(test_db_path()).unwrap();
+        run_launch_worker(
+            &store,
+            &server.client(),
+            LaunchWorkerInput {
+                marker,
+                base_url: server.base_url.clone(),
+                settings: CreateSettings {
+                    agent: None,
+                    provider: None,
+                    model: None,
+                    visible_text: None,
+                    poll_ms: Some(1),
+                    min_injection_interval_ms: Some(1),
+                    max_no_progress_turns: None,
+                    in_flight_timeout_ms: None,
+                },
+                config: &AppConfig::default(),
+                password: None,
+                wait: Duration::from_millis(50),
+                lock_ttl_ms: 1_000,
+            },
+        )
+        .unwrap();
+
+        let goal = store.list_goals().unwrap().remove(0);
+        assert_eq!(goal.session_id, "ses_launch");
+        assert_eq!(goal.objective, "Finish launch");
+        assert_eq!(goal.status, STATUS_COMPLETE);
+    }
+
+    #[test]
+    fn run_cli_from_launch_worker_covers_inside_opencode_entrypoint() {
+        let _http_guard = http_lock().lock().unwrap();
+        let _env_guard = env_lock().lock().unwrap();
+        unsafe {
+            std::env::remove_var("OPENCODE_GOAL_BASE_URL");
+            std::env::remove_var("OPENCODE_GOAL_PROVIDER");
+            std::env::remove_var("OPENCODE_GOAL_MODEL");
+            std::env::remove_var("OPENCODE_GOAL_AGENT");
+            std::env::remove_var("OPENCODE_GOAL_VISIBLE_CONTINUE_TEXT");
+        }
+        let marker = "opencode_goal_launch_cli_test";
+        let server = FakeOpenCode::start();
+        server.add_session("ses_launch_cli", "Launch CLI", 1);
+        server.set_messages(
+            "ses_launch_cli",
+            vec![
+                user_message(
+                    "msg_goal",
+                    &format!(
+                        "<goal_runner_launch>\nmarker: {marker}\n</goal_runner_launch>\n<objective>\nFinish CLI launch\n</objective>"
+                    ),
+                    "",
+                ),
+                assistant_message("msg_done", "GOAL_COMPLETE: cli launch done"),
+            ],
+        );
+        let db = test_db_path();
+        run_cli_from([
+            "opencode-goal-runner".to_string(),
+            "--db".to_string(),
+            db.display().to_string(),
+            "--base-url".to_string(),
+            server.base_url.clone(),
+            "launch".to_string(),
+            "--worker".to_string(),
+            "--marker".to_string(),
+            marker.to_string(),
+            "--wait-seconds".to_string(),
+            "1".to_string(),
+            "--poll-ms".to_string(),
+            "1".to_string(),
+            "--min-injection-interval-ms".to_string(),
+            "1".to_string(),
+        ])
+        .unwrap();
+
+        let goal = Store::open(db).unwrap().list_goals().unwrap().remove(0);
+        assert_eq!(goal.session_id, "ses_launch_cli");
+        assert_eq!(goal.objective, "Finish CLI launch");
+        assert_eq!(goal.status, STATUS_COMPLETE);
     }
 
     #[test]
@@ -3921,6 +4565,14 @@ in_flight_timeout_ms = 444
 
     fn test_dir() -> PathBuf {
         std::env::temp_dir().join(format!("opencode-goal-runner-{}", Uuid::new_v4()))
+    }
+
+    fn true_exe() -> PathBuf {
+        ["/usr/bin/true", "/bin/true"]
+            .into_iter()
+            .map(PathBuf::from)
+            .find(|path| path.is_file())
+            .expect("true executable")
     }
 
     fn create_test_goal_record(

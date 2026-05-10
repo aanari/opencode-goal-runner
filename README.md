@@ -2,7 +2,7 @@
 
 `opencode-goal-runner` is a self-contained Rust sidecar that approximates Codex goal mode for OpenCode without forking or modifying OpenCode.
 
-It owns a persistent goal record, watches an OpenCode session over server mode, and injects continuation prompts only when the session is idle and unblocked. The optional `/goal` command is self-contained and only loads the prompt contract. The Rust binary owns the runtime loop, and the installed runner has no Node.js, Bun, or OpenCode JS SDK runtime dependency.
+It owns a persistent goal record, watches an OpenCode session over server mode, and injects continuation prompts only when the session is idle and unblocked. The optional `/goal` command launches the runner and loads the prompt contract. The Rust binary owns the runtime loop, and the installed runner has no Node.js, Bun, or OpenCode JS SDK runtime dependency.
 
 ## Status
 
@@ -14,7 +14,7 @@ Implemented:
 - direct OpenCode HTTP client
 - SQLite goal store under `~/.config/opencode-goal-runner/goals.sqlite3` by default
 - config file support at `~/.config/opencode-goal-runner/config.toml`
-- `start`, `create`, `run`, `pause`, `resume`, `clear`, `inspect`, `logs`, `list`, `sessions`, `doctor`, and `inject-once`
+- `launch`, `start`, `create`, `run`, `pause`, `resume`, `clear`, `inspect`, `logs`, `list`, `sessions`, `doctor`, and `inject-once`
 - idle polling through `GET /session/status`
 - pending permission and question blocker checks
 - async continuation injection through `POST /session/{sessionID}/prompt_async`
@@ -24,7 +24,7 @@ Implemented:
 - restart-safe in-flight continuation recovery
 - no-progress backoff and pause protection
 - completion detection when an assistant response starts with `GOAL_COMPLETE:`
-- copyable self-contained `/goal` command template at `opencode/command/goal.md`
+- copyable self-contained `/goal` command template at `opencode/command/goal.md` that starts the runner from inside OpenCode
 - `doctor` diagnostics for server reachability, API endpoints, and model behavior
 
 Known limitations:
@@ -129,14 +129,16 @@ OPENCODE_SERVER_PASSWORD=... opencode serve --hostname 127.0.0.1 --port 4096
 OPENCODE_GOAL_PASSWORD=... opencode-goal-runner doctor
 ```
 
-Optionally copy the OpenCode `/goal` command into your OpenCode config:
+Copy the OpenCode `/goal` command into your OpenCode config if you want to control goals from inside OpenCode:
 
 ```sh
 mkdir -p ~/.config/opencode/command
 cp ./opencode/command/goal.md ~/.config/opencode/command/goal.md
 ```
 
-The sidecar works without this command, but it gives you a convenient model-facing contract when you use `/goal` inside OpenCode.
+The sidecar still supports direct CLI use without this command, but `/goal` is the normal inside-OpenCode entry point.
+
+The final product surface is just the binary plus this copyable command file. There is no skill, plugin, or command installer.
 
 ## Daily use
 
@@ -145,17 +147,23 @@ Normal workflow:
 ```sh
 opencode serve --hostname 127.0.0.1 --port 4096
 opencode-goal-runner doctor
+```
 
-# Optional, inside OpenCode, to load the prompt contract.
-/goal
+Inside OpenCode:
 
-opencode-goal-runner start --latest --objective "..."
+```text
+/goal Fix the docs, test, and finish with GOAL_COMPLETE: DOCS_DONE.
+```
+
+Then inspect from any shell:
+
+```sh
 opencode-goal-runner list
 opencode-goal-runner inspect --goal goal_xxx
 opencode-goal-runner logs --goal goal_xxx
 ```
 
-Use `start --latest` for the common case, then inspect the goal record and injection history as needed.
+The `/goal` command runs `opencode-goal-runner launch`, which starts a detached worker, waits for the marked command message to appear in OpenCode, extracts the objective from that message, and starts the goal loop. `start --latest` remains available for scripts or manual CLI use.
 
 ## Config file
 
@@ -219,6 +227,7 @@ CLI examples:
 
 ```sh
 opencode-goal-runner --config ./goal-runner.toml doctor
+opencode-goal-runner launch
 
 opencode-goal-runner start --latest \
   --provider openai \
@@ -232,10 +241,6 @@ Shell-friendly helpers:
 alias ogr='opencode-goal-runner'
 alias ogrd='opencode-goal-runner doctor'
 alias ogrl='opencode-goal-runner list'
-
-ogr-goal() {
-  opencode-goal-runner start --latest --objective "$*"
-}
 ```
 
 ## Doctor
@@ -261,7 +266,7 @@ opencode-goal-runner doctor --skip-model-check
 
 `doctor` prints warnings for model problems where the HTTP server itself is still usable.
 
-## Starting a goal
+## Starting a goal from the CLI
 
 Use an existing OpenCode session, or ask the runner to select the most recently updated session.
 
@@ -505,7 +510,7 @@ It intentionally does not import the OpenCode JS SDK at runtime.
 
 ## OpenCode command
 
-The optional `/goal` command starts a session with the same goal contract that the sidecar injects on continuations. It does not run the sidecar by itself, and the binary intentionally does not install or manage this file.
+The optional `/goal` command starts the runner and sends the same goal contract that the sidecar injects on continuations. The binary intentionally does not install or manage this file.
 
 ```sh
 mkdir -p ~/.config/opencode/command
@@ -518,12 +523,7 @@ Inside OpenCode:
 /goal Update the docs, verify the diff, and finish with GOAL_COMPLETE: DOCS_DONE.
 ```
 
-In another shell:
-
-```sh
-opencode-goal-runner start --latest \
-  --objective "Update the docs, verify the diff, and finish with GOAL_COMPLETE: DOCS_DONE."
-```
+That command invokes `opencode-goal-runner launch` through OpenCode command shell interpolation. `launch` returns quickly after spawning a detached worker, so OpenCode does not wait on the whole goal loop. The worker finds the marked `/goal` message, extracts the objective, persists a goal, and continues through the normal runner loop.
 
 ## Development verification
 
@@ -537,12 +537,12 @@ Current coverage:
 
 ```text
 cargo llvm-cov --summary-only
-line coverage: 95.42%
-function coverage: 93.56%
-tests: 38
+line coverage: 95.30%
+function coverage: 91.67%
+tests: 45
 ```
 
-The automated coverage suite includes unit tests for config resolution, path resolution, selector validation, prompt/message parsing, SQLite lifecycle, lock recovery, injection state, backoff, and no-progress handling. It also includes local OpenCode-compatible HTTP server tests for doctor, sessions, `create --latest`, idle injection, busy/retry waiting, permission/question blockers, user-message waiting, completion, pause-on-no-progress, logs output, and CLI/env/config precedence.
+The automated coverage suite includes unit tests for config resolution, path resolution, selector validation, prompt/message parsing, command launch handoff, SQLite lifecycle, lock recovery, injection state, backoff, and no-progress handling. It also includes local OpenCode-compatible HTTP server tests for doctor, sessions, `create --latest`, `/goal` launch recovery, idle injection, busy/retry waiting, permission/question blockers, user-message waiting, completion, pause-on-no-progress, logs output, and CLI/env/config precedence.
 
 Run the coverage report:
 
@@ -575,12 +575,15 @@ Live check against OpenCode:
 ```sh
 opencode serve --hostname 127.0.0.1 --port 4096
 opencode-goal-runner doctor
-opencode-goal-runner sessions
-opencode-goal-runner start --latest \
-  --objective "Reply exactly with GOAL_COMPLETE: SMOKE_OK and stop."
 ```
 
-Then inspect:
+Then run inside OpenCode:
+
+```text
+/goal Reply exactly with GOAL_COMPLETE: SMOKE_OK and stop.
+```
+
+And inspect:
 
 ```sh
 opencode-goal-runner list
@@ -608,12 +611,12 @@ Optional live smoke:
 ```sh
 opencode serve --hostname 127.0.0.1 --port 4096
 opencode-goal-runner doctor --provider openai --model gpt-5.4-mini
-opencode-goal-runner start --latest \
-  --objective "Reply exactly with GOAL_COMPLETE: RELEASE_SMOKE and stop."
 ```
+
+Then run `/goal Reply exactly with GOAL_COMPLETE: RELEASE_SMOKE and stop.` inside OpenCode.
 
 ## Why this approach
 
-A command alone can shape behavior, but it cannot wake an idle session. A blind shell loop can wake the session, but it cannot reliably respect blockers, locks, user input, or in-flight turns.
+A command alone can shape behavior, but it cannot safely own the long-running loop. The `/goal` command only launches the sidecar and marks the objective. The sidecar wakes the session later, and it can respect blockers, locks, user input, and in-flight turns.
 
 The sidecar is the best no-fork tradeoff for now: OpenCode remains unmodified, the runner is packaged as a standalone binary, and the loop is conservative enough to dogfood safely on bounded tasks. Native OpenCode goal mode would still be cleaner long term.
