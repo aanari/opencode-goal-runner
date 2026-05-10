@@ -2,7 +2,7 @@
 
 ## Task
 
-Dogfood `opencode-goal-runner start` on a bounded OpenCode task and keep repository changes limited to this note.
+Dogfood the installed `/goal` command on a bounded OpenCode task and record the result here.
 
 ## Result
 

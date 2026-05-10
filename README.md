@@ -138,7 +138,7 @@ cp ./opencode/command/goal.md ~/.config/opencode/command/goal.md
 
 The sidecar still supports direct CLI use without this command, but `/goal` is the normal inside-OpenCode entry point.
 
-The final product surface is just the binary plus this copyable command file. There is no skill, plugin, or command installer.
+The product surface is just the binary plus this copyable command file. There is no skill, plugin, or hidden setup requirement.
 
 ## Daily use
 
