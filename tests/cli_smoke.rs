@@ -132,12 +132,59 @@ fn cli_logs_show_injection_details() {
     let stdout = String::from_utf8_lossy(&logs.stdout);
     assert!(stdout.contains("inj_cli"));
     assert!(stdout.contains("completed"));
-    assert!(stdout.contains("created=1"));
-    assert!(stdout.contains("submitted=Some(3)"));
-    assert!(stdout.contains("completed=Some(4)"));
-    assert!(stdout.contains("pre=Some(\"pre\")"));
-    assert!(stdout.contains("post=Some(\"post\")"));
-    assert!(stdout.contains("error=Some(\"none\")"));
+    assert!(stdout.contains("created:"));
+    assert!(stdout.contains("(1)"));
+    assert!(stdout.contains("submitted:"));
+    assert!(stdout.contains("(3)"));
+    assert!(stdout.contains("completed:"));
+    assert!(stdout.contains("(4)"));
+    assert!(stdout.contains("pre_message_id: pre"));
+    assert!(stdout.contains("post_message_id: post"));
+    assert!(stdout.contains("error: none"));
+
+    let logs_json = Command::new(env!("CARGO_BIN_EXE_opencode-goal-runner"))
+        .arg("--db")
+        .arg(&db)
+        .arg("--config")
+        .arg(std::env::temp_dir().join("missing-opencode-goal-runner-config.toml"))
+        .arg("logs")
+        .arg("--goal")
+        .arg(&goal_id)
+        .arg("--limit")
+        .arg("1")
+        .arg("--json")
+        .output()
+        .unwrap();
+    assert!(
+        logs_json.status.success(),
+        "{}",
+        String::from_utf8_lossy(&logs_json.stderr)
+    );
+    let logs_json: serde_json::Value = serde_json::from_slice(&logs_json.stdout).unwrap();
+    assert_eq!(logs_json[0]["injection_id"], "inj_cli");
+    assert_eq!(logs_json[0]["status"], "completed");
+    assert_eq!(logs_json[0]["pre_message_id"], "pre");
+    assert_eq!(logs_json[0]["post_message_id"], "post");
+
+    let inspect_json = Command::new(env!("CARGO_BIN_EXE_opencode-goal-runner"))
+        .arg("--db")
+        .arg(&db)
+        .arg("--config")
+        .arg(std::env::temp_dir().join("missing-opencode-goal-runner-config.toml"))
+        .arg("inspect")
+        .arg("--goal")
+        .arg(&goal_id)
+        .arg("--json")
+        .output()
+        .unwrap();
+    assert!(
+        inspect_json.status.success(),
+        "{}",
+        String::from_utf8_lossy(&inspect_json.stderr)
+    );
+    let inspect_json: serde_json::Value = serde_json::from_slice(&inspect_json.stdout).unwrap();
+    assert_eq!(inspect_json["goal"]["goal_id"], goal_id);
+    assert_eq!(inspect_json["injections"][0]["injection_id"], "inj_cli");
 
     std::fs::remove_file(db).unwrap();
 }

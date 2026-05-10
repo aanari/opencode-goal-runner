@@ -3,6 +3,7 @@ use std::path::PathBuf;
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 use anyhow::{Context, Result, bail};
+use chrono::{Local, SecondsFormat, TimeZone};
 use clap::{Parser, Subcommand};
 use reqwest::StatusCode;
 use reqwest::blocking::{Client, RequestBuilder};
@@ -213,6 +214,9 @@ enum Command {
     Inspect {
         #[arg(long)]
         goal: String,
+
+        #[arg(long)]
+        json: bool,
     },
     Logs {
         #[arg(long)]
@@ -220,6 +224,9 @@ enum Command {
 
         #[arg(long, default_value_t = 20)]
         limit: i64,
+
+        #[arg(long)]
+        json: bool,
     },
     List,
     Sessions {
@@ -405,9 +412,11 @@ fn run_command(cli: Cli) -> Result<()> {
             &goal,
             STATUS_CLEARED,
         ),
-        Command::Inspect { goal } => inspect_goal(&Store::open(resolve_db_path(cli.db)?)?, &goal),
-        Command::Logs { goal, limit } => {
-            show_logs(&Store::open(resolve_db_path(cli.db)?)?, &goal, limit)
+        Command::Inspect { goal, json } => {
+            inspect_goal(&Store::open(resolve_db_path(cli.db)?)?, &goal, json)
+        }
+        Command::Logs { goal, limit, json } => {
+            show_logs(&Store::open(resolve_db_path(cli.db)?)?, &goal, limit, json)
         }
         Command::List => list_goals(&Store::open(resolve_db_path(cli.db)?)?),
         Command::Sessions { limit } => list_sessions(
@@ -550,7 +559,7 @@ struct Store {
     conn: Connection,
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize)]
 struct Goal {
     goal_id: String,
     session_id: String,
@@ -580,7 +589,7 @@ struct Goal {
     last_error: Option<String>,
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone, Serialize)]
 struct Injection {
     injection_id: String,
     status: String,
@@ -591,6 +600,12 @@ struct Injection {
     pre_message_id: Option<String>,
     post_message_id: Option<String>,
     error: Option<String>,
+}
+
+#[derive(Serialize)]
+struct InspectOutput {
+    goal: Goal,
+    injections: Vec<Injection>,
 }
 
 #[derive(Debug)]
@@ -1084,76 +1099,128 @@ fn set_goal_status(store: &Store, goal_id: &str, status: &str) -> Result<()> {
     Ok(())
 }
 
-fn inspect_goal(store: &Store, goal_id: &str) -> Result<()> {
+fn inspect_goal(store: &Store, goal_id: &str, json: bool) -> Result<()> {
     let goal = store.goal(goal_id)?.context("goal not found")?;
-    println!("goal_id: {}", goal.goal_id);
-    println!("session_id: {}", goal.session_id);
-    println!("status: {}", goal.status);
-    println!("objective: {}", goal.objective);
-    println!("base_url: {}", goal.opencode_base_url);
-    println!("agent: {}", goal.agent);
-    println!("model: {}/{}", goal.provider_id, goal.model_id);
-    println!("poll_interval_ms: {}", goal.poll_interval_ms);
-    println!(
-        "min_injection_interval_ms: {}",
-        goal.min_injection_interval_ms
-    );
-    println!("total_injections: {}", goal.total_injections);
-    println!("max_no_progress_turns: {}", goal.max_no_progress_turns);
-    println!(
-        "consecutive_no_progress_turns: {}",
-        goal.consecutive_no_progress_turns
-    );
-    println!("backoff_until_ms: {:?}", goal.backoff_until_ms);
-    println!("last_injected_at_ms: {:?}", goal.last_injected_at_ms);
-    println!("last_seen_message_id: {:?}", goal.last_seen_message_id);
-    println!(
-        "last_seen_assistant_message_id: {:?}",
-        goal.last_seen_assistant_message_id
-    );
-    println!("in_flight_injection_id: {:?}", goal.in_flight_injection_id);
-    println!("in_flight_since_ms: {:?}", goal.in_flight_since_ms);
-    println!("in_flight_timeout_ms: {}", goal.in_flight_timeout_ms);
-    println!("last_decision: {:?}", goal.last_decision);
-    println!("last_error: {:?}", goal.last_error);
-    for injection in store.list_injections(goal_id, 5)? {
+    let injections = store.list_injections(goal_id, 5)?;
+    if json {
         println!(
-            "injection: {}\t{}\tcreated={}\tupdated={}\tsubmitted={:?}\tcompleted={:?}\tpre={:?}\tpost={:?}\terror={:?}",
-            injection.injection_id,
-            injection.status,
-            injection.created_at_ms,
-            injection.updated_at_ms,
-            injection.submitted_at_ms,
-            injection.completed_at_ms,
-            injection.pre_message_id,
-            injection.post_message_id,
-            injection.error,
+            "{}",
+            serde_json::to_string_pretty(&InspectOutput { goal, injections })?
         );
+        return Ok(());
     }
+    print_goal(&goal, &injections);
     Ok(())
 }
 
-fn show_logs(store: &Store, goal_id: &str, limit: i64) -> Result<()> {
+fn show_logs(store: &Store, goal_id: &str, limit: i64, json: bool) -> Result<()> {
     let injections = store.list_injections(goal_id, limit)?;
+    if json {
+        println!("{}", serde_json::to_string_pretty(&injections)?);
+        return Ok(());
+    }
     if injections.is_empty() {
         println!("no injections");
         return Ok(());
     }
     for injection in injections {
-        println!(
-            "{}\t{}\tcreated={}\tupdated={}\tsubmitted={:?}\tcompleted={:?}\tpre={:?}\tpost={:?}\terror={:?}",
-            injection.injection_id,
-            injection.status,
-            injection.created_at_ms,
-            injection.updated_at_ms,
-            injection.submitted_at_ms,
-            injection.completed_at_ms,
-            injection.pre_message_id,
-            injection.post_message_id,
-            injection.error,
-        );
+        print_injection(&injection);
     }
     Ok(())
+}
+
+fn print_goal(goal: &Goal, injections: &[Injection]) {
+    println!("goal {}", goal.goal_id);
+    println!("  status: {}", goal.status);
+    println!("  session: {}", goal.session_id);
+    println!("  objective: {}", goal.objective.replace('\n', " "));
+    println!("  base_url: {}", goal.opencode_base_url);
+    println!("  model: {}/{}", goal.provider_id, goal.model_id);
+    println!("  agent: {}", goal.agent);
+    println!("  created: {}", format_ms(goal.created_at_ms));
+    println!("  updated: {}", format_ms(goal.updated_at_ms));
+    println!("loop");
+    println!("  total_injections: {}", goal.total_injections);
+    println!("  poll_interval_ms: {}", goal.poll_interval_ms);
+    println!(
+        "  min_injection_interval_ms: {}",
+        goal.min_injection_interval_ms
+    );
+    println!("  max_no_progress_turns: {}", goal.max_no_progress_turns);
+    println!(
+        "  consecutive_no_progress_turns: {}",
+        goal.consecutive_no_progress_turns
+    );
+    println!(
+        "  last_injected: {}",
+        format_optional_ms(goal.last_injected_at_ms)
+    );
+    println!(
+        "  backoff_until: {}",
+        format_optional_ms(goal.backoff_until_ms)
+    );
+    println!(
+        "  in_flight: {}",
+        goal.in_flight_injection_id.as_deref().unwrap_or("none")
+    );
+    println!(
+        "  in_flight_since: {}",
+        format_optional_ms(goal.in_flight_since_ms)
+    );
+    println!("  in_flight_timeout_ms: {}", goal.in_flight_timeout_ms);
+    println!("state");
+    println!(
+        "  last_seen_message_id: {}",
+        goal.last_seen_message_id.as_deref().unwrap_or("none")
+    );
+    println!(
+        "  last_seen_assistant_message_id: {}",
+        goal.last_seen_assistant_message_id
+            .as_deref()
+            .unwrap_or("none")
+    );
+    println!(
+        "  last_decision: {}",
+        goal.last_decision.as_deref().unwrap_or("none")
+    );
+    println!(
+        "  last_error: {}",
+        goal.last_error.as_deref().unwrap_or("none")
+    );
+    println!("recent injections");
+    if injections.is_empty() {
+        println!("  none");
+        return;
+    }
+    for injection in injections {
+        print_injection(injection);
+    }
+}
+
+fn print_injection(injection: &Injection) {
+    println!("  {} {}", injection.injection_id, injection.status);
+    println!("    created: {}", format_ms(injection.created_at_ms));
+    println!("    updated: {}", format_ms(injection.updated_at_ms));
+    println!(
+        "    submitted: {}",
+        format_optional_ms(injection.submitted_at_ms)
+    );
+    println!(
+        "    completed: {}",
+        format_optional_ms(injection.completed_at_ms)
+    );
+    println!(
+        "    pre_message_id: {}",
+        injection.pre_message_id.as_deref().unwrap_or("none")
+    );
+    println!(
+        "    post_message_id: {}",
+        injection.post_message_id.as_deref().unwrap_or("none")
+    );
+    println!(
+        "    error: {}",
+        injection.error.as_deref().unwrap_or("none")
+    );
 }
 
 fn list_goals(store: &Store) -> Result<()> {
@@ -1204,10 +1271,15 @@ fn doctor(client: &OpenCodeClient, input: DoctorInput) -> Result<()> {
     } else {
         match doctor_model_check(client, &input) {
             Ok(()) => println!("ok model {}/{}", input.provider, input.model),
-            Err(error) => println!(
-                "warn model {}/{} check failed: {error}",
-                input.provider, input.model
-            ),
+            Err(error) => {
+                println!(
+                    "warn model {}/{} check failed: {error}",
+                    input.provider, input.model
+                );
+                println!(
+                    "hint: verify the provider/model in OpenCode, or rerun with --provider <id> --model <id>."
+                );
+            }
         }
     }
 
@@ -2098,7 +2170,12 @@ impl OpenCodeClient {
             )
             .json(&payload)
             .send()
-            .context("failed to submit prompt_async")?;
+            .with_context(|| {
+                format!(
+                    "failed to submit prompt_async to {}; is `opencode serve --hostname 127.0.0.1 --port 4096` running?",
+                    self.base_url
+                )
+            })?;
 
         if response.status() == StatusCode::NO_CONTENT {
             return Ok(());
@@ -2106,18 +2183,29 @@ impl OpenCodeClient {
 
         let status = response.status();
         let body = response.text().unwrap_or_default();
-        bail!("prompt_async failed with {status}: {body}");
+        bail!(
+            "prompt_async failed with {status}: {body}{}",
+            http_status_hint(status)
+        );
     }
 
     fn get_json(&self, path: &str) -> Result<Value> {
         let response = self
             .auth(self.client.get(self.url(path)))
             .send()
-            .with_context(|| format!("failed to GET {path}"))?;
+            .with_context(|| {
+                format!(
+                    "failed to GET {path} from {}; is `opencode serve --hostname 127.0.0.1 --port 4096` running?",
+                    self.base_url
+                )
+            })?;
         let status = response.status();
         let body = response.text().unwrap_or_default();
         if !status.is_success() {
-            bail!("GET {path} failed with {status}: {body}");
+            bail!(
+                "GET {path} failed with {status}: {body}{}",
+                http_status_hint(status)
+            );
         }
         serde_json::from_str(&body).with_context(|| format!("failed to parse JSON from {path}"))
     }
@@ -2131,6 +2219,19 @@ impl OpenCodeClient {
             Some(password) => request.basic_auth("opencode-goal-runner", Some(password)),
             None => request,
         }
+    }
+}
+
+fn http_status_hint(status: StatusCode) -> &'static str {
+    match status.as_u16() {
+        401 | 403 => {
+            "\nhint: OpenCode rejected authentication. Set OPENCODE_GOAL_PASSWORD to the same value as OPENCODE_SERVER_PASSWORD."
+        }
+        404 => "\nhint: OpenCode did not expose this endpoint. Check the OpenCode server version.",
+        500..=599 => {
+            "\nhint: OpenCode returned a server error. Check the OpenCode server logs, provider, and model."
+        }
+        _ => "",
     }
 }
 
@@ -2371,6 +2472,23 @@ fn now_ms() -> Result<i64> {
         .duration_since(UNIX_EPOCH)
         .context("system clock is before unix epoch")?
         .as_millis() as i64)
+}
+
+fn format_ms(ms: i64) -> String {
+    Local
+        .timestamp_millis_opt(ms)
+        .single()
+        .map(|time| {
+            format!(
+                "{} ({ms})",
+                time.to_rfc3339_opts(SecondsFormat::Millis, true)
+            )
+        })
+        .unwrap_or_else(|| format!("invalid ({ms})"))
+}
+
+fn format_optional_ms(ms: Option<i64>) -> String {
+    ms.map(format_ms).unwrap_or_else(|| "none".to_string())
 }
 
 #[cfg(test)]
@@ -2732,6 +2850,14 @@ mod tests {
     }
 
     #[test]
+    fn formats_timestamps_with_iso_and_raw_ms() {
+        assert!(format_ms(0).contains("(0)"));
+        assert!(format_ms(0).contains('T'));
+        assert_eq!(format_optional_ms(None), "none");
+        assert!(format_optional_ms(Some(1)).contains("(1)"));
+    }
+
+    #[test]
     fn computes_bounded_backoff() {
         assert_eq!(backoff_ms(1, 1_000), 2_000);
         assert_eq!(backoff_ms(10, 10_000), MAX_BACKOFF_MS);
@@ -2867,12 +2993,14 @@ mod tests {
             "goal_test",
             "--limit",
             "3",
+            "--json",
         ])
         .unwrap();
         match cli.command {
-            Command::Logs { goal, limit } => {
+            Command::Logs { goal, limit, json } => {
                 assert_eq!(goal, "goal_test");
                 assert_eq!(limit, 3);
+                assert!(json);
             }
             _ => panic!("expected logs command"),
         }
@@ -3221,6 +3349,17 @@ in_flight_timeout_ms = 444
                 .unwrap_err()
                 .to_string()
                 .contains("did not return an array")
+        );
+
+        let server = FakeOpenCode::start();
+        server.fail_path("/session", 403, "forbidden");
+        assert!(
+            server
+                .client()
+                .sessions()
+                .unwrap_err()
+                .to_string()
+                .contains("OPENCODE_GOAL_PASSWORD")
         );
     }
 
@@ -3757,6 +3896,7 @@ in_flight_timeout_ms = 444
             "inspect".to_string(),
             "--goal".to_string(),
             start_goal.goal_id.clone(),
+            "--json".to_string(),
         ]))
         .unwrap();
         run_cli_from(base_args(vec![
@@ -3765,6 +3905,7 @@ in_flight_timeout_ms = 444
             start_goal.goal_id.clone(),
             "--limit".to_string(),
             "10".to_string(),
+            "--json".to_string(),
         ]))
         .unwrap();
 

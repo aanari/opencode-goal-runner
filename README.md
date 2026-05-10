@@ -169,6 +169,18 @@ opencode-goal-runner start --latest \
   --objective "Make the smallest safe change, verify it, then finish with GOAL_COMPLETE."
 ```
 
+Shell-friendly helpers:
+
+```sh
+alias ogr='opencode-goal-runner'
+alias ogrd='opencode-goal-runner doctor'
+alias ogrl='opencode-goal-runner list'
+
+ogr-goal() {
+  opencode-goal-runner start --latest --objective "$*"
+}
+```
+
 ## Doctor
 
 Run this before trusting an unattended goal loop:
@@ -245,6 +257,7 @@ Inspect current state:
 
 ```sh
 opencode-goal-runner inspect --goal goal_xxx
+opencode-goal-runner inspect --goal goal_xxx --json
 ```
 
 Pause, resume, or clear:
@@ -264,9 +277,12 @@ Show recent injection events:
 ```sh
 opencode-goal-runner logs --goal goal_xxx
 opencode-goal-runner logs --goal goal_xxx --limit 50
+opencode-goal-runner logs --goal goal_xxx --limit 50 --json
 ```
 
-Each row includes:
+Human output formats timestamps as local RFC3339 time plus the raw epoch milliseconds in parentheses. JSON output keeps the stored fields unchanged for scripts.
+
+Each injection entry includes:
 
 ```text
 injection_id
@@ -319,12 +335,24 @@ The durable instructions go into the hidden `system` field. The model is asked t
 - start OpenCode with `opencode serve --hostname 127.0.0.1 --port 4096`
 - check `base_url` in config or pass `--base-url`
 - if the server has a password, set `OPENCODE_GOAL_PASSWORD`
+- expected error: `failed to GET /session from http://127.0.0.1:4096; is opencode serve ... running?`
 
 Model check fails:
 
 - pass an explicit provider/model that works in your OpenCode session
 - with ChatGPT account auth, `openai/gpt-5.4-mini` has worked in local spikes
 - use `doctor --skip-model-check` only when you have already verified the model manually
+- expected warning: `warn model <provider>/<model> check failed: ...`
+
+Authentication fails:
+
+- set `OPENCODE_GOAL_PASSWORD` to the same value as `OPENCODE_SERVER_PASSWORD`
+- expected hint: `OpenCode rejected authentication. Set OPENCODE_GOAL_PASSWORD...`
+
+OpenCode endpoint shape changed:
+
+- upgrade or downgrade OpenCode to a version with the expected server API
+- expected error: `OpenCode did not expose this endpoint. Check the OpenCode server version.`
 
 The runner says `waiting_on_permission` or `waiting_on_question`:
 
@@ -462,9 +490,9 @@ Current release-candidate coverage after the test-hardening pass:
 
 ```text
 cargo llvm-cov --summary-only
-line coverage: 95.91%
-function coverage: 93.37%
-tests: 36
+line coverage: 95.24%
+function coverage: 92.72%
+tests: 37
 ```
 
 The automated coverage suite includes unit tests for config resolution, path resolution, selector validation, prompt/message parsing, SQLite lifecycle, lock recovery, injection state, backoff, and no-progress handling. It also includes local OpenCode-compatible HTTP server tests for doctor, sessions, `create --latest`, idle injection, busy/retry waiting, permission/question blockers, user-message waiting, completion, pause-on-no-progress, logs output, and CLI/env/config precedence.
@@ -511,6 +539,29 @@ Then inspect:
 opencode-goal-runner list
 opencode-goal-runner inspect --goal goal_xxx
 opencode-goal-runner logs --goal goal_xxx --limit 20
+```
+
+## Release checklist
+
+Before cutting a local release or sharing a binary:
+
+```sh
+git status --short
+cargo test
+make coverage
+cargo build --release
+make install
+env -i HOME="$HOME" PATH="$HOME/.local/bin:/usr/bin:/bin:/opt/homebrew/bin" \
+  opencode-goal-runner --version
+```
+
+Optional live smoke:
+
+```sh
+opencode serve --hostname 127.0.0.1 --port 4096
+opencode-goal-runner doctor --provider openai --model gpt-5.4-mini
+opencode-goal-runner start --latest \
+  --objective "Reply exactly with GOAL_COMPLETE: RELEASE_SMOKE and stop."
 ```
 
 ## Why this approach
