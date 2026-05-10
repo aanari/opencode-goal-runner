@@ -12,6 +12,12 @@ use serde_json::Value;
 use uuid::Uuid;
 
 const DEFAULT_BASE_URL: &str = "http://127.0.0.1:4096";
+const DEFAULT_AGENT: &str = "build";
+const DEFAULT_PROVIDER: &str = "openai";
+const DEFAULT_MODEL: &str = "gpt-5.4-mini";
+const DEFAULT_VISIBLE_CONTINUE_TEXT: &str = "continue";
+const DEFAULT_POLL_INTERVAL_MS: i64 = 2_000;
+const DEFAULT_MIN_INJECTION_INTERVAL_MS: i64 = 1_000;
 const STATUS_ACTIVE: &str = "active";
 const STATUS_PAUSED: &str = "paused";
 const STATUS_COMPLETE: &str = "complete";
@@ -85,8 +91,25 @@ struct Cli {
     #[arg(long, env = "OPENCODE_GOAL_DB", global = true)]
     db: Option<PathBuf>,
 
+    #[arg(long, env = "OPENCODE_GOAL_CONFIG", global = true)]
+    config: Option<PathBuf>,
+
     #[command(subcommand)]
     command: Command,
+}
+
+#[derive(Debug, Default, Deserialize)]
+struct AppConfig {
+    base_url: Option<String>,
+    provider: Option<String>,
+    model: Option<String>,
+    agent: Option<String>,
+    visible_continue_text: Option<String>,
+    poll_interval_ms: Option<i64>,
+    min_injection_interval_ms: Option<i64>,
+    max_no_progress_turns: Option<i64>,
+    lock_ttl_ms: Option<i64>,
+    in_flight_timeout_ms: Option<i64>,
 }
 
 #[derive(Subcommand)]
@@ -101,29 +124,29 @@ enum Command {
         #[arg(long)]
         objective: String,
 
-        #[arg(long, default_value = "build")]
-        agent: String,
+        #[arg(long)]
+        agent: Option<String>,
 
-        #[arg(long, default_value = "openai")]
-        provider: String,
+        #[arg(long)]
+        provider: Option<String>,
 
-        #[arg(long, default_value = "gpt-5.4-mini")]
-        model: String,
+        #[arg(long)]
+        model: Option<String>,
 
-        #[arg(long, default_value = "continue")]
-        visible_text: String,
+        #[arg(long)]
+        visible_text: Option<String>,
 
-        #[arg(long, default_value_t = 2000)]
-        poll_ms: i64,
+        #[arg(long)]
+        poll_ms: Option<i64>,
 
-        #[arg(long, default_value_t = 1000)]
-        min_injection_interval_ms: i64,
+        #[arg(long)]
+        min_injection_interval_ms: Option<i64>,
 
-        #[arg(long, default_value_t = DEFAULT_MAX_NO_PROGRESS_TURNS)]
-        max_no_progress_turns: i64,
+        #[arg(long)]
+        max_no_progress_turns: Option<i64>,
 
-        #[arg(long, default_value_t = DEFAULT_IN_FLIGHT_TIMEOUT_MS)]
-        in_flight_timeout_ms: i64,
+        #[arg(long)]
+        in_flight_timeout_ms: Option<i64>,
     },
     Start {
         #[arg(long)]
@@ -135,32 +158,32 @@ enum Command {
         #[arg(long)]
         objective: String,
 
-        #[arg(long, default_value = "build")]
-        agent: String,
+        #[arg(long)]
+        agent: Option<String>,
 
-        #[arg(long, default_value = "openai")]
-        provider: String,
+        #[arg(long)]
+        provider: Option<String>,
 
-        #[arg(long, default_value = "gpt-5.4-mini")]
-        model: String,
+        #[arg(long)]
+        model: Option<String>,
 
-        #[arg(long, default_value = "continue")]
-        visible_text: String,
+        #[arg(long)]
+        visible_text: Option<String>,
 
-        #[arg(long, default_value_t = 2000)]
-        poll_ms: i64,
+        #[arg(long)]
+        poll_ms: Option<i64>,
 
-        #[arg(long, default_value_t = 1000)]
-        min_injection_interval_ms: i64,
+        #[arg(long)]
+        min_injection_interval_ms: Option<i64>,
 
-        #[arg(long, default_value_t = DEFAULT_MAX_NO_PROGRESS_TURNS)]
-        max_no_progress_turns: i64,
+        #[arg(long)]
+        max_no_progress_turns: Option<i64>,
 
-        #[arg(long, default_value_t = DEFAULT_IN_FLIGHT_TIMEOUT_MS)]
-        in_flight_timeout_ms: i64,
+        #[arg(long)]
+        in_flight_timeout_ms: Option<i64>,
 
-        #[arg(long, default_value_t = DEFAULT_LOCK_TTL_MS)]
-        lock_ttl_ms: i64,
+        #[arg(long)]
+        lock_ttl_ms: Option<i64>,
     },
     Run {
         #[arg(long)]
@@ -172,8 +195,8 @@ enum Command {
         #[arg(long)]
         max_injections: Option<u64>,
 
-        #[arg(long, default_value_t = DEFAULT_LOCK_TTL_MS)]
-        lock_ttl_ms: i64,
+        #[arg(long)]
+        lock_ttl_ms: Option<i64>,
     },
     Pause {
         #[arg(long)]
@@ -191,20 +214,27 @@ enum Command {
         #[arg(long)]
         goal: String,
     },
+    Logs {
+        #[arg(long)]
+        goal: String,
+
+        #[arg(long, default_value_t = 20)]
+        limit: i64,
+    },
     List,
     Sessions {
         #[arg(long, default_value_t = 10)]
         limit: usize,
     },
     Doctor {
-        #[arg(long, default_value = "build")]
-        agent: String,
+        #[arg(long)]
+        agent: Option<String>,
 
-        #[arg(long, default_value = "openai")]
-        provider: String,
+        #[arg(long)]
+        provider: Option<String>,
 
-        #[arg(long, default_value = "gpt-5.4-mini")]
-        model: String,
+        #[arg(long)]
+        model: Option<String>,
 
         #[arg(long)]
         target_dir: Option<PathBuf>,
@@ -229,28 +259,29 @@ enum Command {
         #[arg(long)]
         objective: String,
 
-        #[arg(long, default_value = "build")]
-        agent: String,
+        #[arg(long)]
+        agent: Option<String>,
 
-        #[arg(long, default_value = "openai")]
-        provider: String,
+        #[arg(long)]
+        provider: Option<String>,
 
-        #[arg(long, default_value = "gpt-5.4-mini")]
-        model: String,
+        #[arg(long)]
+        model: Option<String>,
 
-        #[arg(long, default_value = "continue")]
-        visible_text: String,
+        #[arg(long)]
+        visible_text: Option<String>,
 
         #[arg(long, default_value_t = 60)]
         timeout_seconds: u64,
 
-        #[arg(long, default_value_t = 1000)]
-        poll_ms: u64,
+        #[arg(long)]
+        poll_ms: Option<u64>,
     },
 }
 
 fn main() -> Result<()> {
     let cli = Cli::parse();
+    let config = AppConfig::load(&resolve_config_path(cli.config.clone())?)?;
     match cli.command {
         Command::Create {
             session,
@@ -265,22 +296,25 @@ fn main() -> Result<()> {
             max_no_progress_turns,
             in_flight_timeout_ms,
         } => {
-            let base_url = resolve_base_url(cli.base_url);
+            let base_url = resolve_base_url(cli.base_url, &config);
             create_goal(
                 &Store::open(resolve_db_path(cli.db)?)?,
-                CreateGoalInput {
-                    session: resolve_create_session(session, latest, &base_url, cli.password)?,
+                create_goal_input(
+                    resolve_create_session(session, latest, &base_url, cli.password)?,
                     objective,
                     base_url,
-                    agent,
-                    provider,
-                    model,
-                    visible_text,
-                    poll_ms,
-                    min_injection_interval_ms,
-                    max_no_progress_turns,
-                    in_flight_timeout_ms,
-                },
+                    CreateSettings {
+                        agent,
+                        provider,
+                        model,
+                        visible_text,
+                        poll_ms,
+                        min_injection_interval_ms,
+                        max_no_progress_turns,
+                        in_flight_timeout_ms,
+                    },
+                    &config,
+                )?,
             )
         }
         Command::Start {
@@ -297,25 +331,33 @@ fn main() -> Result<()> {
             in_flight_timeout_ms,
             lock_ttl_ms,
         } => {
-            let base_url = resolve_base_url(cli.base_url);
+            let base_url = resolve_base_url(cli.base_url, &config);
             let password = cli.password;
             start_goal(
                 &Store::open(resolve_db_path(cli.db)?)?,
-                CreateGoalInput {
-                    session: resolve_create_session(session, latest, &base_url, password.clone())?,
+                create_goal_input(
+                    resolve_create_session(session, latest, &base_url, password.clone())?,
                     objective,
                     base_url,
-                    agent,
-                    provider,
-                    model,
-                    visible_text,
-                    poll_ms,
-                    min_injection_interval_ms,
-                    max_no_progress_turns,
-                    in_flight_timeout_ms,
-                },
+                    CreateSettings {
+                        agent,
+                        provider,
+                        model,
+                        visible_text,
+                        poll_ms,
+                        min_injection_interval_ms,
+                        max_no_progress_turns,
+                        in_flight_timeout_ms,
+                    },
+                    &config,
+                )?,
                 password,
-                lock_ttl_ms,
+                resolve_i64(
+                    lock_ttl_ms,
+                    "OPENCODE_GOAL_LOCK_TTL_MS",
+                    config.lock_ttl_ms,
+                    DEFAULT_LOCK_TTL_MS,
+                )?,
             )
         }
         Command::Run {
@@ -327,9 +369,14 @@ fn main() -> Result<()> {
             &Store::open(resolve_db_path(cli.db)?)?,
             GoalSelector { goal, session },
             cli.password,
-            cli.base_url,
+            resolve_base_url_override(cli.base_url, &config),
             max_injections,
-            lock_ttl_ms,
+            resolve_i64(
+                lock_ttl_ms,
+                "OPENCODE_GOAL_LOCK_TTL_MS",
+                config.lock_ttl_ms,
+                DEFAULT_LOCK_TTL_MS,
+            )?,
         ),
         Command::Pause { goal } => set_goal_status(
             &Store::open(resolve_db_path(cli.db)?)?,
@@ -347,9 +394,12 @@ fn main() -> Result<()> {
             STATUS_CLEARED,
         ),
         Command::Inspect { goal } => inspect_goal(&Store::open(resolve_db_path(cli.db)?)?, &goal),
+        Command::Logs { goal, limit } => {
+            show_logs(&Store::open(resolve_db_path(cli.db)?)?, &goal, limit)
+        }
         Command::List => list_goals(&Store::open(resolve_db_path(cli.db)?)?),
         Command::Sessions { limit } => list_sessions(
-            &OpenCodeClient::new(resolve_base_url(cli.base_url), cli.password)?,
+            &OpenCodeClient::new(resolve_base_url(cli.base_url, &config), cli.password)?,
             limit,
         ),
         Command::Doctor {
@@ -360,11 +410,26 @@ fn main() -> Result<()> {
             skip_model_check,
             timeout_seconds,
         } => doctor(
-            &OpenCodeClient::new(resolve_base_url(cli.base_url), cli.password)?,
+            &OpenCodeClient::new(resolve_base_url(cli.base_url, &config), cli.password)?,
             DoctorInput {
-                agent,
-                provider,
-                model,
+                agent: resolve_string(
+                    agent,
+                    "OPENCODE_GOAL_AGENT",
+                    config.agent.as_deref(),
+                    DEFAULT_AGENT,
+                ),
+                provider: resolve_string(
+                    provider,
+                    "OPENCODE_GOAL_PROVIDER",
+                    config.provider.as_deref(),
+                    DEFAULT_PROVIDER,
+                ),
+                model: resolve_string(
+                    model,
+                    "OPENCODE_GOAL_MODEL",
+                    config.model.as_deref(),
+                    DEFAULT_MODEL,
+                ),
                 target_dir: resolve_opencode_config_dir(target_dir)?,
                 skip_model_check,
                 timeout: Duration::from_secs(timeout_seconds),
@@ -382,19 +447,51 @@ fn main() -> Result<()> {
             visible_text,
             timeout_seconds,
             poll_ms,
-        } => inject_once(
-            &OpenCodeClient::new(resolve_base_url(cli.base_url), cli.password)?,
-            InjectOnceInput {
-                session: &session,
-                objective: &objective,
-                agent: &agent,
-                provider: &provider,
-                model: &model,
-                visible_text: &visible_text,
-                timeout: Duration::from_secs(timeout_seconds),
-                poll: Duration::from_millis(poll_ms),
-            },
-        ),
+        } => {
+            let agent = resolve_string(
+                agent,
+                "OPENCODE_GOAL_AGENT",
+                config.agent.as_deref(),
+                DEFAULT_AGENT,
+            );
+            let provider = resolve_string(
+                provider,
+                "OPENCODE_GOAL_PROVIDER",
+                config.provider.as_deref(),
+                DEFAULT_PROVIDER,
+            );
+            let model = resolve_string(
+                model,
+                "OPENCODE_GOAL_MODEL",
+                config.model.as_deref(),
+                DEFAULT_MODEL,
+            );
+            let visible_text = resolve_string(
+                visible_text,
+                "OPENCODE_GOAL_VISIBLE_CONTINUE_TEXT",
+                config.visible_continue_text.as_deref(),
+                DEFAULT_VISIBLE_CONTINUE_TEXT,
+            );
+            let poll = Duration::from_millis(resolve_u64(
+                poll_ms,
+                "OPENCODE_GOAL_POLL_INTERVAL_MS",
+                config.poll_interval_ms,
+                DEFAULT_POLL_INTERVAL_MS,
+            )?);
+            inject_once(
+                &OpenCodeClient::new(resolve_base_url(cli.base_url, &config), cli.password)?,
+                InjectOnceInput {
+                    session: &session,
+                    objective: &objective,
+                    agent: &agent,
+                    provider: &provider,
+                    model: &model,
+                    visible_text: &visible_text,
+                    timeout: Duration::from_secs(timeout_seconds),
+                    poll,
+                },
+            )
+        }
     }
 }
 
@@ -410,6 +507,17 @@ struct CreateGoalInput {
     min_injection_interval_ms: i64,
     max_no_progress_turns: i64,
     in_flight_timeout_ms: i64,
+}
+
+struct CreateSettings {
+    agent: Option<String>,
+    provider: Option<String>,
+    model: Option<String>,
+    visible_text: Option<String>,
+    poll_ms: Option<i64>,
+    min_injection_interval_ms: Option<i64>,
+    max_no_progress_turns: Option<i64>,
+    in_flight_timeout_ms: Option<i64>,
 }
 
 struct DoctorInput {
@@ -466,6 +574,8 @@ struct Injection {
     status: String,
     created_at_ms: i64,
     updated_at_ms: i64,
+    submitted_at_ms: Option<i64>,
+    completed_at_ms: Option<i64>,
     pre_message_id: Option<String>,
     post_message_id: Option<String>,
     error: Option<String>,
@@ -554,6 +664,81 @@ struct MessageSnapshot {
 
 struct TickResult {
     injected: bool,
+}
+
+impl AppConfig {
+    fn load(path: &PathBuf) -> Result<Self> {
+        if !path.exists() {
+            return Ok(Self::default());
+        }
+        toml::from_str(
+            &fs::read_to_string(path)
+                .with_context(|| format!("failed to read config file {}", path.display()))?,
+        )
+        .with_context(|| format!("failed to parse config file {}", path.display()))
+    }
+}
+
+fn create_goal_input(
+    session: String,
+    objective: String,
+    base_url: String,
+    settings: CreateSettings,
+    config: &AppConfig,
+) -> Result<CreateGoalInput> {
+    Ok(CreateGoalInput {
+        session,
+        objective,
+        base_url,
+        agent: resolve_string(
+            settings.agent,
+            "OPENCODE_GOAL_AGENT",
+            config.agent.as_deref(),
+            DEFAULT_AGENT,
+        ),
+        provider: resolve_string(
+            settings.provider,
+            "OPENCODE_GOAL_PROVIDER",
+            config.provider.as_deref(),
+            DEFAULT_PROVIDER,
+        ),
+        model: resolve_string(
+            settings.model,
+            "OPENCODE_GOAL_MODEL",
+            config.model.as_deref(),
+            DEFAULT_MODEL,
+        ),
+        visible_text: resolve_string(
+            settings.visible_text,
+            "OPENCODE_GOAL_VISIBLE_CONTINUE_TEXT",
+            config.visible_continue_text.as_deref(),
+            DEFAULT_VISIBLE_CONTINUE_TEXT,
+        ),
+        poll_ms: resolve_i64(
+            settings.poll_ms,
+            "OPENCODE_GOAL_POLL_INTERVAL_MS",
+            config.poll_interval_ms,
+            DEFAULT_POLL_INTERVAL_MS,
+        )?,
+        min_injection_interval_ms: resolve_i64(
+            settings.min_injection_interval_ms,
+            "OPENCODE_GOAL_MIN_INJECTION_INTERVAL_MS",
+            config.min_injection_interval_ms,
+            DEFAULT_MIN_INJECTION_INTERVAL_MS,
+        )?,
+        max_no_progress_turns: resolve_i64(
+            settings.max_no_progress_turns,
+            "OPENCODE_GOAL_MAX_NO_PROGRESS_TURNS",
+            config.max_no_progress_turns,
+            DEFAULT_MAX_NO_PROGRESS_TURNS,
+        )?,
+        in_flight_timeout_ms: resolve_i64(
+            settings.in_flight_timeout_ms,
+            "OPENCODE_GOAL_IN_FLIGHT_TIMEOUT_MS",
+            config.in_flight_timeout_ms,
+            DEFAULT_IN_FLIGHT_TIMEOUT_MS,
+        )?,
+    })
 }
 
 fn create_goal(store: &Store, input: CreateGoalInput) -> Result<()> {
@@ -921,11 +1106,36 @@ fn inspect_goal(store: &Store, goal_id: &str) -> Result<()> {
     println!("last_error: {:?}", goal.last_error);
     for injection in store.list_injections(goal_id, 5)? {
         println!(
-            "injection: {}\t{}\tcreated={}\tupdated={}\tpre={:?}\tpost={:?}\terror={:?}",
+            "injection: {}\t{}\tcreated={}\tupdated={}\tsubmitted={:?}\tcompleted={:?}\tpre={:?}\tpost={:?}\terror={:?}",
             injection.injection_id,
             injection.status,
             injection.created_at_ms,
             injection.updated_at_ms,
+            injection.submitted_at_ms,
+            injection.completed_at_ms,
+            injection.pre_message_id,
+            injection.post_message_id,
+            injection.error,
+        );
+    }
+    Ok(())
+}
+
+fn show_logs(store: &Store, goal_id: &str, limit: i64) -> Result<()> {
+    let injections = store.list_injections(goal_id, limit)?;
+    if injections.is_empty() {
+        println!("no injections");
+        return Ok(());
+    }
+    for injection in injections {
+        println!(
+            "{}\t{}\tcreated={}\tupdated={}\tsubmitted={:?}\tcompleted={:?}\tpre={:?}\tpost={:?}\terror={:?}",
+            injection.injection_id,
+            injection.status,
+            injection.created_at_ms,
+            injection.updated_at_ms,
+            injection.submitted_at_ms,
+            injection.completed_at_ms,
             injection.pre_message_id,
             injection.post_message_id,
             injection.error,
@@ -1607,7 +1817,7 @@ impl Store {
 
     fn list_injections(&self, goal_id: &str, limit: i64) -> Result<Vec<Injection>> {
         let mut statement = self.conn.prepare(
-            "SELECT injection_id, status, created_at_ms, updated_at_ms, pre_message_id, post_message_id, error
+            "SELECT injection_id, status, created_at_ms, updated_at_ms, submitted_at_ms, completed_at_ms, pre_message_id, post_message_id, error
              FROM injections
              WHERE goal_id = ?
              ORDER BY created_at_ms DESC
@@ -1620,9 +1830,11 @@ impl Store {
                     status: row.get(1)?,
                     created_at_ms: row.get(2)?,
                     updated_at_ms: row.get(3)?,
-                    pre_message_id: row.get(4)?,
-                    post_message_id: row.get(5)?,
-                    error: row.get(6)?,
+                    submitted_at_ms: row.get(4)?,
+                    completed_at_ms: row.get(5)?,
+                    pre_message_id: row.get(6)?,
+                    post_message_id: row.get(7)?,
+                    error: row.get(8)?,
                 })
             })?
             .collect::<std::result::Result<Vec<_>, _>>()
@@ -2043,8 +2255,66 @@ fn backoff_ms(no_progress_turns: i64, min_injection_interval_ms: i64) -> i64 {
     (base * multiplier).min(MAX_BACKOFF_MS)
 }
 
-fn resolve_base_url(base_url: Option<String>) -> String {
-    base_url.unwrap_or_else(|| DEFAULT_BASE_URL.to_string())
+fn resolve_base_url(base_url: Option<String>, config: &AppConfig) -> String {
+    resolve_string(
+        base_url,
+        "OPENCODE_GOAL_BASE_URL",
+        config.base_url.as_deref(),
+        DEFAULT_BASE_URL,
+    )
+}
+
+fn resolve_base_url_override(base_url: Option<String>, config: &AppConfig) -> Option<String> {
+    base_url
+        .or_else(|| std::env::var("OPENCODE_GOAL_BASE_URL").ok())
+        .or_else(|| config.base_url.clone())
+}
+
+fn resolve_string(
+    cli_value: Option<String>,
+    env_key: &str,
+    config_value: Option<&str>,
+    default: &str,
+) -> String {
+    cli_value
+        .or_else(|| std::env::var(env_key).ok())
+        .or_else(|| config_value.map(str::to_string))
+        .unwrap_or_else(|| default.to_string())
+}
+
+fn resolve_i64(
+    cli_value: Option<i64>,
+    env_key: &str,
+    config_value: Option<i64>,
+    default: i64,
+) -> Result<i64> {
+    if let Some(value) = cli_value {
+        return Ok(value);
+    }
+    if let Some(value) = std::env::var(env_key).ok() {
+        return value
+            .parse()
+            .with_context(|| format!("failed to parse {env_key}={value} as integer"));
+    }
+    Ok(config_value.unwrap_or(default))
+}
+
+fn resolve_u64(
+    cli_value: Option<u64>,
+    env_key: &str,
+    config_value: Option<i64>,
+    default: i64,
+) -> Result<u64> {
+    let value = resolve_i64(
+        cli_value.map(|value| value as i64),
+        env_key,
+        config_value,
+        default,
+    )?;
+    if value < 0 {
+        bail!("{env_key} must be non-negative");
+    }
+    Ok(value as u64)
 }
 
 fn resolve_db_path(path: Option<PathBuf>) -> Result<PathBuf> {
@@ -2056,6 +2326,18 @@ fn resolve_db_path(path: Option<PathBuf>) -> Result<PathBuf> {
         .or_else(|| std::env::var_os("HOME").map(|home| PathBuf::from(home).join(".config")))
         .context("set OPENCODE_GOAL_DB or HOME")?;
     Ok(base.join("opencode-goal-runner").join("goals.sqlite3"))
+}
+
+fn resolve_config_path(path: Option<PathBuf>) -> Result<PathBuf> {
+    if let Some(path) = path {
+        return Ok(path);
+    }
+    Ok(
+        PathBuf::from(std::env::var_os("HOME").context("set OPENCODE_GOAL_CONFIG or HOME")?)
+            .join(".config")
+            .join("opencode-goal-runner")
+            .join("config.toml"),
+    )
 }
 
 fn resolve_opencode_config_dir(path: Option<PathBuf>) -> Result<PathBuf> {
@@ -2188,8 +2470,8 @@ mod tests {
             } => {
                 assert!(latest);
                 assert_eq!(objective, "ship it");
-                assert_eq!(provider, "openai");
-                assert_eq!(model, "gpt-5.4-mini");
+                assert_eq!(provider, None);
+                assert_eq!(model, None);
             }
             _ => panic!("expected start command"),
         }
@@ -2214,12 +2496,110 @@ mod tests {
                 skip_model_check,
                 ..
             } => {
-                assert_eq!(provider, "openai");
-                assert_eq!(model, "gpt-5.4-mini");
+                assert_eq!(provider, Some("openai".to_string()));
+                assert_eq!(model, Some("gpt-5.4-mini".to_string()));
                 assert!(skip_model_check);
             }
             _ => panic!("expected doctor command"),
         }
+    }
+
+    #[test]
+    fn parses_logs_cli() {
+        let cli = Cli::try_parse_from([
+            "opencode-goal-runner",
+            "logs",
+            "--goal",
+            "goal_test",
+            "--limit",
+            "3",
+        ])
+        .unwrap();
+        match cli.command {
+            Command::Logs { goal, limit } => {
+                assert_eq!(goal, "goal_test");
+                assert_eq!(limit, 3);
+            }
+            _ => panic!("expected logs command"),
+        }
+    }
+
+    #[test]
+    fn loads_config_file() {
+        let path = std::env::temp_dir().join(format!(
+            "opencode-goal-runner-config-{}.toml",
+            Uuid::new_v4()
+        ));
+        fs::write(
+            &path,
+            r#"
+base_url = "http://127.0.0.1:4999"
+provider = "cfg-provider"
+model = "cfg-model"
+agent = "cfg-agent"
+visible_continue_text = "cfg-continue"
+poll_interval_ms = 111
+min_injection_interval_ms = 222
+max_no_progress_turns = 4
+lock_ttl_ms = 333
+in_flight_timeout_ms = 444
+"#,
+        )
+        .unwrap();
+        let config = AppConfig::load(&path).unwrap();
+        assert_eq!(config.base_url, Some("http://127.0.0.1:4999".to_string()));
+        assert_eq!(config.provider, Some("cfg-provider".to_string()));
+        assert_eq!(config.model, Some("cfg-model".to_string()));
+        assert_eq!(config.agent, Some("cfg-agent".to_string()));
+        assert_eq!(
+            config.visible_continue_text,
+            Some("cfg-continue".to_string())
+        );
+        assert_eq!(config.poll_interval_ms, Some(111));
+        assert_eq!(config.min_injection_interval_ms, Some(222));
+        assert_eq!(config.max_no_progress_turns, Some(4));
+        assert_eq!(config.lock_ttl_ms, Some(333));
+        assert_eq!(config.in_flight_timeout_ms, Some(444));
+        fs::remove_file(path).unwrap();
+    }
+
+    #[test]
+    fn create_goal_input_prefers_cli_over_config() {
+        let input = create_goal_input(
+            "ses_config".to_string(),
+            "objective".to_string(),
+            "http://cli".to_string(),
+            CreateSettings {
+                agent: Some("cli-agent".to_string()),
+                provider: Some("cli-provider".to_string()),
+                model: Some("cli-model".to_string()),
+                visible_text: Some("cli-continue".to_string()),
+                poll_ms: Some(1),
+                min_injection_interval_ms: Some(2),
+                max_no_progress_turns: Some(3),
+                in_flight_timeout_ms: Some(4),
+            },
+            &AppConfig {
+                agent: Some("cfg-agent".to_string()),
+                provider: Some("cfg-provider".to_string()),
+                model: Some("cfg-model".to_string()),
+                visible_continue_text: Some("cfg-continue".to_string()),
+                poll_interval_ms: Some(11),
+                min_injection_interval_ms: Some(22),
+                max_no_progress_turns: Some(33),
+                in_flight_timeout_ms: Some(44),
+                ..Default::default()
+            },
+        )
+        .unwrap();
+        assert_eq!(input.agent, "cli-agent");
+        assert_eq!(input.provider, "cli-provider");
+        assert_eq!(input.model, "cli-model");
+        assert_eq!(input.visible_text, "cli-continue");
+        assert_eq!(input.poll_ms, 1);
+        assert_eq!(input.min_injection_interval_ms, 2);
+        assert_eq!(input.max_no_progress_turns, 3);
+        assert_eq!(input.in_flight_timeout_ms, 4);
     }
 
     #[test]
