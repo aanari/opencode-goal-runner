@@ -566,6 +566,14 @@ Build release artifacts:
 ./build-release.sh --check
 ```
 
+Verify built artifacts:
+
+```sh
+./dist/opencode-goal-runner-aarch64-apple-darwin --version
+./dist/opencode-goal-runner-aarch64-apple-darwin launch --help
+file ./dist/opencode-goal-runner-x86_64-unknown-linux-musl
+```
+
 Install:
 
 ```sh
@@ -608,11 +616,13 @@ Before cutting a local release or sharing a binary:
 ```sh
 git status --short
 ./install.sh --check
-./build-release.sh --mac-only
+./build-release.sh
 ./install.sh
 env -i HOME="$HOME" PATH="$HOME/.local/bin:/usr/bin:/bin:/opt/homebrew/bin" \
   opencode-goal-runner --version
 ```
+
+Use `./build-release.sh --mac-only` if Linux cross-build tooling is not installed yet.
 
 No Makefile, Node.js, Bun, OpenCode JS SDK, or CI wrapper is required for local install.
 

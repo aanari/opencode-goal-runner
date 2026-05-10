@@ -25,6 +25,17 @@ Completed a later installed `/goal` launch smoke with shell-sensitive objective 
 
 `inspect` preserved literal quotes, `'$HOME'`, backticks, XML-ish text, and multiline objective content. `logs` showed `inj_db5b4d5d2d1c41ffae2970b9b3468bc3` as `completed` with no stuck in-flight injection.
 
+Completed a release-platform pass after installing the local Linux cross-build toolchain.
+
+- macOS artifact: `dist/opencode-goal-runner-aarch64-apple-darwin`.
+- Linux artifact: `dist/opencode-goal-runner-x86_64-unknown-linux-musl`.
+- Linux artifact type: statically linked x86-64 ELF.
+- Clean-install simulation: temp `HOME`, temp `bin`, only the binary plus `/goal` command copied into config; `--version` and `launch --help` worked without Node.js or Bun on `PATH`.
+- Live release smoke goal: `goal_054309ee504d4a83a7d69c41b5101c32`.
+- Live release smoke total injections: `1`.
+
+The Linux binary was built locally with `rustup target add x86_64-unknown-linux-musl`, `cargo install cargo-zigbuild`, and `brew install zig`. Docker was installed but the daemon was not running, so the Linux artifact was not executed inside Linux during this pass.
+
 ## What worked
 
 - The installed release binary ran the goal loop without Node.js, Bun, or the OpenCode JS SDK.
