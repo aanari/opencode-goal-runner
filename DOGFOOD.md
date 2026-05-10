@@ -36,6 +36,14 @@ Completed a release-platform pass after installing the local Linux cross-build t
 
 The Linux binary was built locally with `rustup target add x86_64-unknown-linux-musl`, `cargo install cargo-zigbuild`, and `brew install zig`. Docker was installed but the daemon was not running, so the Linux artifact was not executed inside Linux during this pass.
 
+Completed a long-haul `/goal` dogfood pass with three fresh live OpenCode command launches against an isolated goal database.
+
+- Shell-sensitive extraction run: `goal_33cd5cbeda1d4bb5bbafb8e69a1ecff5`, `complete`, `total_injections: 1`.
+- Docs/release audit run: `goal_313b5bf19b52438c91fc951f942ba259`, `complete`, `total_injections: 1`.
+- Inspect/logs UX smoke run: `goal_43d6c0314249415bbef64f64c0473609`, `complete`, `total_injections: 1`.
+
+The shell-sensitive run preserved quotes, apostrophes, `'$HOME'`, backticks, XML-ish text, and literal `</objective>` text in the stored objective. All three runs had completed injection rows, no stuck in-flight injection, and `last_decision: complete`. The docs/release audit did not find a real issue requiring code or script changes.
+
 ## What worked
 
 - The installed release binary ran the goal loop without Node.js, Bun, or the OpenCode JS SDK.
