@@ -1,4 +1,5 @@
 use std::fs::{self, OpenOptions};
+use std::io::{self, Write};
 use std::path::PathBuf;
 use std::process::{Command as StdCommand, Stdio};
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
@@ -1498,17 +1499,37 @@ fn list_goals(store: &Store) -> Result<()> {
         println!("no goals");
         return Ok(());
     }
+    let mut stdout = io::stdout().lock();
     for goal in goals {
-        println!(
+        if let Err(error) = writeln!(
+            stdout,
             "{}\t{}\t{}\t{}\t{}",
             goal.goal_id,
             goal.status,
             goal.session_id,
             goal.total_injections,
-            goal.objective.replace('\n', " ")
-        );
+            compact_line(&goal.objective, 160)
+        ) {
+            if error.kind() == io::ErrorKind::BrokenPipe {
+                return Ok(());
+            }
+            return Err(error).context("failed to write goal list");
+        }
     }
     Ok(())
+}
+
+fn compact_line(value: &str, max_chars: usize) -> String {
+    let line = value.replace('\n', " ");
+    if line.chars().count() <= max_chars {
+        return line;
+    }
+    format!(
+        "{}...",
+        line.chars()
+            .take(max_chars.saturating_sub(3))
+            .collect::<String>()
+    )
 }
 
 fn list_sessions(client: &OpenCodeClient, limit: usize) -> Result<()> {
@@ -3337,6 +3358,14 @@ mod tests {
     fn computes_bounded_backoff() {
         assert_eq!(backoff_ms(1, 1_000), 2_000);
         assert_eq!(backoff_ms(10, 10_000), MAX_BACKOFF_MS);
+    }
+
+    #[test]
+    fn compact_line_truncates_multiline_values() {
+        assert_eq!(compact_line("short\nline", 20), "short line");
+        assert_eq!(compact_line("abcdef", 6), "abcdef");
+        assert_eq!(compact_line("abcdef", 5), "ab...");
+        assert_eq!(compact_line("abcdef", 2), "...");
     }
 
     #[test]
