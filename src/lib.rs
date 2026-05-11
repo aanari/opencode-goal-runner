@@ -34,6 +34,7 @@ const INJECTION_FAILED: &str = "failed";
 const DEFAULT_LOCK_TTL_MS: i64 = 30_000;
 const DEFAULT_MAX_NO_PROGRESS_TURNS: i64 = 3;
 const DEFAULT_IN_FLIGHT_TIMEOUT_MS: i64 = 600_000;
+const IDLE_IN_FLIGHT_TIMEOUT_MS: i64 = 30_000;
 const DEFAULT_LAUNCH_WAIT_SECONDS: u64 = 60;
 const MAX_BACKOFF_MS: i64 = 30_000;
 const LAUNCH_MARKER_PREFIX: &str = "opencode_goal_launch_";
@@ -1232,6 +1233,12 @@ fn tick_goal(store: &Store, client: &OpenCodeClient, goal: &Goal) -> Result<Tick
     if let Some(in_flight_since_ms) = goal.in_flight_since_ms {
         if snapshot.assistant_count > goal.in_flight_assistant_count.unwrap_or_default() {
             store.finish_non_complete_injection(goal, &snapshot)?;
+            return Ok(TickResult { injected: false });
+        }
+        if snapshot.latest_user_is_sidecar
+            && now - in_flight_since_ms > goal.in_flight_timeout_ms.min(IDLE_IN_FLIGHT_TIMEOUT_MS)
+        {
+            store.pause_in_flight_timeout(goal, "idle_in_flight_timeout")?;
             return Ok(TickResult { injected: false });
         }
         if now - in_flight_since_ms > goal.in_flight_timeout_ms {
@@ -4982,6 +4989,56 @@ in_flight_timeout_ms = 444
             store.list_injections(&goal.goal_id, 1).unwrap()[0].status,
             INJECTION_FAILED
         );
+    }
+
+    #[test]
+    fn tick_goal_pauses_idle_sidecar_in_flight_before_full_timeout() {
+        let _guard = http_lock().lock().unwrap();
+        let server = FakeOpenCode::start();
+        server.add_session("ses_idle_timeout", "Idle Timeout", 1);
+        server.set_messages(
+            "ses_idle_timeout",
+            vec![user_message("msg_sidecar", "continue", GOAL_SYSTEM_PREFIX)],
+        );
+        let store = Store::open(test_db_path()).unwrap();
+        let goal = create_test_goal_record(&store, &server, "ses_idle_timeout", "finish", 3);
+        let injection_id = store
+            .begin_injection(
+                &goal,
+                &MessageSnapshot {
+                    latest_message_id: None,
+                    latest_role: None,
+                    latest_user_is_sidecar: false,
+                    latest_assistant_message_id: None,
+                    latest_assistant_text: None,
+                    latest_assistant_parent_is_user: false,
+                    latest_assistant_parent_is_sidecar: false,
+                    assistant_count: 0,
+                },
+            )
+            .unwrap();
+        store
+            .conn
+            .execute(
+                "UPDATE goals SET in_flight_since_ms = ?, in_flight_timeout_ms = 600000 WHERE goal_id = ?",
+                params![now_ms().unwrap() - IDLE_IN_FLIGHT_TIMEOUT_MS - 1, goal.goal_id],
+            )
+            .unwrap();
+        let in_flight = store.goal(&goal.goal_id).unwrap().unwrap();
+        tick_goal(&store, &server.client(), &in_flight).unwrap();
+        let updated = store.goal(&goal.goal_id).unwrap().unwrap();
+        assert_eq!(updated.status, STATUS_PAUSED);
+        assert_eq!(
+            updated.last_decision,
+            Some("paused_in_flight_timeout".to_string())
+        );
+        assert_eq!(
+            updated.last_error,
+            Some("idle_in_flight_timeout".to_string())
+        );
+        let injection = store.list_injections(&goal.goal_id, 1).unwrap()[0].clone();
+        assert_eq!(injection.injection_id, injection_id);
+        assert_eq!(injection.status, INJECTION_FAILED);
     }
 
     #[test]
