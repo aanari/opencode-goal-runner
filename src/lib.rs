@@ -2306,6 +2306,7 @@ impl OpenCodeClient {
             password,
             client: Client::builder()
                 .timeout(Duration::from_secs(30))
+                .pool_max_idle_per_host(0)
                 .build()
                 .context("failed to create HTTP client")?,
         })
