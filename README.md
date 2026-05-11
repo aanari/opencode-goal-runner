@@ -34,6 +34,12 @@ Known limitations:
 - no semantic completion proof beyond the model's `GOAL_COMPLETE:` marker and your inspection
 - OpenCode API changes can break the sidecar because this intentionally avoids vendoring or forking OpenCode
 
+## Codex alignment
+
+Codex goal mode has native runtime support: persisted thread goals, `create_goal` and `update_goal` tools, token and elapsed-time accounting, budget-limited status, queued-input checks, plan-mode suppression, and hidden developer continuation turns. This sidecar cannot reproduce those native hooks without OpenCode changes.
+
+The transferable parts are the prompt contract and conservative loop policy. The runner follows the Codex-style shape: an untrusted objective block, explicit stale-context isolation, an audit against actual current state, prompt-to-artifact checklist language, blocker waiting, no-progress protection, and completion only when the active goal has real evidence. Because OpenCode does not expose native goal tools, completion is represented by an assistant response that starts with `GOAL_COMPLETE:` instead of a Codex `update_goal` call.
+
 ## Install
 
 Build and install to a user-writable bin directory:
@@ -394,10 +400,11 @@ The durable instructions go into the hidden `system` field. The model is asked t
 
 `doctor` cannot reach the server:
 
-- start OpenCode with `opencode serve --hostname 127.0.0.1 --port 4096`
+- for TUI-driven use, start OpenCode with `opencode --port 4096`
+- for a headless API-only server, start OpenCode with `opencode serve --hostname 127.0.0.1 --port 4096`
 - check `base_url` in config or pass `--base-url`
 - if the server has a password, set `OPENCODE_GOAL_PASSWORD`
-- expected error: `failed to GET /session from http://127.0.0.1:4096; is opencode serve ... running?`
+- expected error: `failed to GET /session from http://127.0.0.1:4096`
 
 Model check fails:
 
@@ -583,7 +590,7 @@ Install:
 Live check against OpenCode:
 
 ```sh
-opencode serve --hostname 127.0.0.1 --port 4096
+opencode --port 4096
 opencode-goal-runner doctor
 ```
 
@@ -609,6 +616,14 @@ Stress the launch handoff with shell-sensitive data:
 
 After it finishes, inspect the goal and verify the objective was stored with the literal quotes, dollar sign, backticks, and XML-ish text. This checks that `/goal` recovers the objective from the OpenCode command message instead of shell-quoting it.
 
+Canonical continuation smoke:
+
+```text
+/goal End-to-end smoke. On the initial /goal command turn, reply exactly WAITING_FOR_CANONICAL_SMOKE and do not include GOAL_COMPLETE. If and only if this is an opencode-goal-runner sidecar continuation for this exact active objective, reply exactly GOAL_COMPLETE: CANONICAL_SMOKE_DONE. Do not edit files, inspect files, run commands, or use tools.
+```
+
+The goal should finish with `total_injections: 1`. That proves the `/goal` command launched the binary from inside OpenCode and the sidecar woke the idle session later.
+
 ## Release checklist
 
 Before cutting a local release or sharing a binary:
@@ -629,7 +644,7 @@ No Makefile, Node.js, Bun, OpenCode JS SDK, or CI wrapper is required for local 
 Optional live smoke:
 
 ```sh
-opencode serve --hostname 127.0.0.1 --port 4096
+opencode --port 4096
 opencode-goal-runner doctor --provider openai --model gpt-5.4-mini
 ```
 
