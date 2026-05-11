@@ -44,6 +44,40 @@ Completed a long-haul `/goal` dogfood pass with three fresh live OpenCode comman
 
 The shell-sensitive run preserved quotes, apostrophes, `'$HOME'`, backticks, XML-ish text, and literal `</objective>` text in the stored objective. All three runs had completed injection rows, no stuck in-flight injection, and `last_decision: complete`. The docs/release audit did not find a real issue requiring code or script changes.
 
+Completed a 90-minute live TUI soak on 2026-05-11 through the installed `/goal` command and the installed release binary.
+
+- Run token: `1778513929026`.
+- OpenCode launch: `opencode --port 4096`.
+- Rounds: `136`.
+- Live goals created for the run: `419`.
+- Completed goals: `374`.
+- Impossible/no-progress goals paused and cleared as expected: `45`.
+- Sidecar continuations injected: `552`.
+- New failed goals: `0`.
+- Leftover locks: `0`.
+- Leftover active/paused goals: `0`.
+- OpenCode blockers after the run: empty `/session/status`, `/permission`, and `/question`.
+
+The soak mixed canonical one-continuation goals, stale marker isolation, file recovery goals, impossible no-progress goals, and direct sidecar multi-step goals. One OpenCode transient `Internal Server Error` happened during a recovery case; the runner retried and completed the goal, validating the HTTP retry path added during hardening.
+
+Added `scripts/live_goal_soak.py` afterward so the same live product-path soak is repeatable instead of only being an ad-hoc terminal session. A one-round run of the checked-in script completed with two live `/goal` goals and two sidecar injections:
+
+- Run token: `1778531987073`.
+- Canonical goal: `goal_0adb7178fa3c4aecacf02fe88f0c89a6`, `complete`, `total_injections: 1`.
+- Stale marker goal: `goal_a2fc4aa1655f40239ceffa42b03fd5a0`, `complete`, `total_injections: 1`.
+
+A four-round run of the checked-in script completed afterward, covering every soak case:
+
+- Run token: `1778532032932`.
+- Rounds: `4`.
+- Goals: `12`.
+- Completed goals: `11`.
+- Impossible/no-progress goals paused and cleared as expected: `1`.
+- Sidecar continuations injected: `15`.
+- New failed goals: `0`.
+- Leftover locks: `0`.
+- Leftover active/paused goals: `0`.
+
 ## What worked
 
 - The installed release binary ran the goal loop without Node.js, Bun, or the OpenCode JS SDK.

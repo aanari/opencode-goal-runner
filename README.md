@@ -546,9 +546,9 @@ Current coverage:
 
 ```text
 cargo llvm-cov --summary-only
-line coverage: 95.34%
-function coverage: 91.80%
-tests: 47
+line coverage: 95.68%
+function coverage: 92.31%
+tests: 61
 ```
 
 The automated coverage suite includes unit tests for config resolution, positive loop-setting validation, path resolution, selector validation, prompt/message parsing, command launch handoff, shell-sensitive objective extraction, SQLite lifecycle, lock recovery, injection state, backoff, and no-progress handling. It also includes local OpenCode-compatible HTTP server tests for doctor, sessions, `create --latest`, `/goal` launch recovery, idle injection, busy/retry waiting, permission/question blockers, user-message waiting, completion, pause-on-no-progress, logs output, and CLI/env/config precedence.
@@ -623,6 +623,24 @@ Canonical continuation smoke:
 ```
 
 The goal should finish with `total_injections: 1`. That proves the `/goal` command launched the binary from inside OpenCode and the sidecar woke the idle session later.
+
+Automated live soak:
+
+```sh
+opencode --port 4096
+python3 scripts/live_goal_soak.py --rounds 1
+python3 scripts/live_goal_soak.py --duration-seconds 5400
+```
+
+The soak script drives the installed `/goal` command through the live TUI HTTP routes, so it requires the OpenCode TUI to be running with `--port 4096`. It fails if the installed command differs from `opencode/command/goal.md`, if OpenCode has pending permissions/questions, if session locks leak, if a goal remains active/paused after a round, or if any run goal fails.
+
+Each soak round exercises:
+
+- canonical `/goal` launch with exactly one sidecar continuation
+- stale `GOAL_COMPLETE` marker isolation
+- file recovery after partial progress
+- no-progress pause-and-clear behavior on every third round
+- direct sidecar multi-step continuation on every fourth round
 
 ## Release checklist
 
