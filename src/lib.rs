@@ -36,7 +36,7 @@ const INJECTION_FAILED: &str = "failed";
 const DEFAULT_LOCK_TTL_MS: i64 = 30_000;
 const DEFAULT_MAX_NO_PROGRESS_TURNS: i64 = 3;
 const DEFAULT_IN_FLIGHT_TIMEOUT_MS: i64 = 600_000;
-const IDLE_IN_FLIGHT_TIMEOUT_MS: i64 = 30_000;
+const ORPHAN_SIDECAR_RETRY_GRACE_MS: i64 = 60_000;
 const DEFAULT_LAUNCH_WAIT_SECONDS: u64 = 60;
 const MAX_BACKOFF_MS: i64 = 30_000;
 const LAUNCH_MARKER_PREFIX: &str = "opencode_goal_launch_";
@@ -1349,12 +1349,6 @@ fn tick_goal(store: &Store, client: &OpenCodeClient, goal: &Goal) -> Result<Tick
             store.finish_non_complete_injection(goal, &snapshot)?;
             return Ok(TickResult { injected: false });
         }
-        if snapshot.latest_user_is_sidecar
-            && now - in_flight_since_ms > goal.in_flight_timeout_ms.min(IDLE_IN_FLIGHT_TIMEOUT_MS)
-        {
-            store.pause_in_flight_timeout(goal, "idle_in_flight_timeout")?;
-            return Ok(TickResult { injected: false });
-        }
         if now - in_flight_since_ms > goal.in_flight_timeout_ms {
             store.pause_in_flight_timeout(goal, "in_flight_timeout")?;
             return Ok(TickResult { injected: false });
@@ -1363,13 +1357,12 @@ fn tick_goal(store: &Store, client: &OpenCodeClient, goal: &Goal) -> Result<Tick
         return Ok(TickResult { injected: false });
     }
 
-    if snapshot.latest_user_is_sidecar && goal.total_injections > 0 {
-        if goal.last_injected_at_ms.is_some_and(|last| {
-            now - last > goal.in_flight_timeout_ms.min(IDLE_IN_FLIGHT_TIMEOUT_MS)
-        }) {
-            store.pause_in_flight_timeout(goal, "orphan_sidecar_response_timeout")?;
-            return Ok(TickResult { injected: false });
-        }
+    if snapshot.latest_user_is_sidecar
+        && goal.total_injections > 0
+        && goal
+            .last_injected_at_ms
+            .is_none_or(|last| now - last <= ORPHAN_SIDECAR_RETRY_GRACE_MS)
+    {
         store.update_decision(&goal.goal_id, "waiting_for_assistant_response", None)?;
         return Ok(TickResult { injected: false });
     }
@@ -5411,7 +5404,7 @@ in_flight_timeout_ms = 444
     }
 
     #[test]
-    fn tick_goal_pauses_stale_orphan_sidecar_user() {
+    fn tick_goal_retries_stale_orphan_sidecar_user() {
         let _guard = http_lock().lock().unwrap();
         let server = FakeOpenCode::start();
         server.add_session("ses_orphan_timeout", "Orphan Timeout", 1);
@@ -5430,24 +5423,27 @@ in_flight_timeout_ms = 444
         store
             .conn
             .execute(
-                "UPDATE goals SET total_injections = 1, last_injected_at_ms = ?, in_flight_timeout_ms = 600000 WHERE goal_id = ?",
-                params![now_ms().unwrap() - IDLE_IN_FLIGHT_TIMEOUT_MS - 1, goal.goal_id],
+                "UPDATE goals SET total_injections = 1, last_injected_at_ms = ? WHERE goal_id = ?",
+                params![
+                    now_ms().unwrap() - ORPHAN_SIDECAR_RETRY_GRACE_MS - 1,
+                    goal.goal_id
+                ],
             )
             .unwrap();
         let active = store.goal(&goal.goal_id).unwrap().unwrap();
 
-        tick_goal(&store, &server.client(), &active).unwrap();
+        let result = tick_goal(&store, &server.client(), &active).unwrap();
+        assert!(result.injected);
         let updated = store.goal(&goal.goal_id).unwrap().unwrap();
-        assert_eq!(updated.status, STATUS_PAUSED);
+        assert_eq!(updated.status, STATUS_ACTIVE);
+        assert_eq!(updated.last_decision, Some("injected".to_string()));
+        assert_eq!(updated.total_injections, 2);
+        assert!(updated.in_flight_injection_id.is_some());
+        assert_eq!(server.prompt_count(), 1);
         assert_eq!(
-            updated.last_decision,
-            Some("paused_in_flight_timeout".to_string())
+            store.list_injections(&goal.goal_id, 1).unwrap()[0].status,
+            INJECTION_SUBMITTED
         );
-        assert_eq!(
-            updated.last_error,
-            Some("orphan_sidecar_response_timeout".to_string())
-        );
-        assert_eq!(server.prompt_count(), 0);
     }
 
     #[test]
@@ -5618,6 +5614,7 @@ in_flight_timeout_ms = 444
                 },
             )
             .unwrap();
+        store.mark_injection_submitted(&injection_id).unwrap();
         store
             .conn
             .execute(
@@ -5644,7 +5641,7 @@ in_flight_timeout_ms = 444
     }
 
     #[test]
-    fn tick_goal_pauses_idle_sidecar_in_flight_before_full_timeout() {
+    fn tick_goal_waits_on_sidecar_in_flight_before_full_timeout() {
         let _guard = http_lock().lock().unwrap();
         let server = FakeOpenCode::start();
         server.add_session("ses_idle_timeout", "Idle Timeout", 1);
@@ -5670,28 +5667,25 @@ in_flight_timeout_ms = 444
                 },
             )
             .unwrap();
+        store.mark_injection_submitted(&injection_id).unwrap();
         store
             .conn
             .execute(
                 "UPDATE goals SET in_flight_since_ms = ?, in_flight_timeout_ms = 600000 WHERE goal_id = ?",
-                params![now_ms().unwrap() - IDLE_IN_FLIGHT_TIMEOUT_MS - 1, goal.goal_id],
+                params![now_ms().unwrap() - 30_001, goal.goal_id],
             )
             .unwrap();
         let in_flight = store.goal(&goal.goal_id).unwrap().unwrap();
         tick_goal(&store, &server.client(), &in_flight).unwrap();
         let updated = store.goal(&goal.goal_id).unwrap().unwrap();
-        assert_eq!(updated.status, STATUS_PAUSED);
+        assert_eq!(updated.status, STATUS_ACTIVE);
         assert_eq!(
             updated.last_decision,
-            Some("paused_in_flight_timeout".to_string())
-        );
-        assert_eq!(
-            updated.last_error,
-            Some("idle_in_flight_timeout".to_string())
+            Some("waiting_for_assistant_response".to_string())
         );
         let injection = store.list_injections(&goal.goal_id, 1).unwrap()[0].clone();
         assert_eq!(injection.injection_id, injection_id);
-        assert_eq!(injection.status, INJECTION_FAILED);
+        assert_eq!(injection.status, INJECTION_SUBMITTED);
     }
 
     #[test]
