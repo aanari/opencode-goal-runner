@@ -27,6 +27,7 @@ const STATUS_COMPLETE: &str = "complete";
 const STATUS_CLEARED: &str = "cleared";
 const STATUS_FAILED: &str = "failed";
 const GOAL_SYSTEM_PREFIX: &str = "Continue working toward the active OpenCode goal.";
+const GOAL_VISIBLE_MARKER: &str = "This is an `opencode-goal-runner` sidecar continuation turn";
 const COMPLETE_PREFIX: &str = "GOAL_COMPLETE:";
 const INJECTION_ATTEMPTED: &str = "attempted";
 const INJECTION_SUBMITTED: &str = "submitted";
@@ -751,6 +752,7 @@ struct InjectOnceInput<'a> {
 struct MessageSnapshot {
     latest_message_id: Option<String>,
     latest_role: Option<String>,
+    latest_text: Option<String>,
     latest_user_is_sidecar: bool,
     latest_assistant_message_id: Option<String>,
     latest_assistant_text: Option<String>,
@@ -1311,10 +1313,27 @@ fn tick_goal(store: &Store, client: &OpenCodeClient, goal: &Goal) -> Result<Tick
     if goal.total_injections > 0
         && snapshot.latest_assistant_parent_is_user
         && !snapshot.latest_assistant_parent_is_sidecar
+        && has_new_message(
+            &snapshot.latest_assistant_message_id,
+            &goal.last_seen_assistant_message_id,
+        )
     {
         store.pause_user_intervention(goal, &snapshot)?;
         return Ok(TickResult { injected: false });
     }
+
+    if snapshot.latest_role.as_deref() == Some("user")
+        && !snapshot.latest_user_is_sidecar
+        && has_new_message(&snapshot.latest_message_id, &goal.last_seen_message_id)
+    {
+        if snapshot_is_initial_goal_command(&snapshot, &goal.objective) {
+            store.update_decision(&goal.goal_id, "waiting_for_initial_goal_response", None)?;
+            return Ok(TickResult { injected: false });
+        }
+        store.pause_user_intervention(goal, &snapshot)?;
+        return Ok(TickResult { injected: false });
+    }
+
     if snapshot
         .latest_assistant_text
         .as_deref()
@@ -1344,8 +1363,14 @@ fn tick_goal(store: &Store, client: &OpenCodeClient, goal: &Goal) -> Result<Tick
         return Ok(TickResult { injected: false });
     }
 
-    if snapshot.latest_role.as_deref() == Some("user") && !snapshot.latest_user_is_sidecar {
-        store.pause_user_intervention(goal, &snapshot)?;
+    if snapshot.latest_user_is_sidecar && goal.total_injections > 0 {
+        if goal.last_injected_at_ms.is_some_and(|last| {
+            now - last > goal.in_flight_timeout_ms.min(IDLE_IN_FLIGHT_TIMEOUT_MS)
+        }) {
+            store.pause_in_flight_timeout(goal, "orphan_sidecar_response_timeout")?;
+            return Ok(TickResult { injected: false });
+        }
+        store.update_decision(&goal.goal_id, "waiting_for_assistant_response", None)?;
         return Ok(TickResult { injected: false });
     }
 
@@ -1388,6 +1413,20 @@ fn tick_goal(store: &Store, client: &OpenCodeClient, goal: &Goal) -> Result<Tick
         goal.session_id, goal.provider_id, goal.model_id
     );
     Ok(TickResult { injected: true })
+}
+
+fn has_new_message(current: &Option<String>, previous: &Option<String>) -> bool {
+    current.is_some() && current != previous
+}
+
+fn snapshot_is_initial_goal_command(snapshot: &MessageSnapshot, objective: &str) -> bool {
+    snapshot.latest_role.as_deref() == Some("user")
+        && snapshot
+            .latest_text
+            .as_deref()
+            .filter(|text| text.contains("<goal_runner_launch>"))
+            .and_then(|text| extract_goal_objective(text).ok())
+            .is_some_and(|launch_objective| launch_objective == objective)
 }
 
 fn inject_once(client: &OpenCodeClient, input: InjectOnceInput<'_>) -> Result<()> {
@@ -2507,6 +2546,7 @@ impl OpenCodeClient {
         let items = self.messages(session)?;
         let latest = items.last();
         let latest_role = latest.and_then(message_role).map(str::to_string);
+        let latest_text = latest.map(message_text);
         let latest_user_is_sidecar =
             latest_role.as_deref() == Some("user") && latest.is_some_and(message_is_sidecar_user);
         let latest_assistant = items
@@ -2527,6 +2567,7 @@ impl OpenCodeClient {
         Ok(MessageSnapshot {
             latest_message_id: latest.and_then(message_id).map(str::to_string),
             latest_role,
+            latest_text,
             latest_user_is_sidecar,
             latest_assistant_message_id: latest_assistant.and_then(message_id).map(str::to_string),
             latest_assistant_text: latest_assistant.map(message_text),
@@ -2734,11 +2775,12 @@ fn message_parent_id(message: &Value) -> Option<&str> {
 
 fn message_is_sidecar_user(message: &Value) -> bool {
     message_role(message) == Some("user")
-        && message
+        && (message
             .get("info")
             .and_then(|info| info.get("system"))
             .and_then(Value::as_str)
             .is_some_and(|system| system.starts_with(GOAL_SYSTEM_PREFIX))
+            || message_text(message).contains(GOAL_VISIBLE_MARKER))
 }
 
 fn message_text(message: &Value) -> String {
@@ -2783,7 +2825,7 @@ When and only when the goal is complete, start the final response with `{COMPLET
 
 fn continuation_visible_text(goal: &Goal) -> String {
     format!(
-        "{}\n\nThis is an `opencode-goal-runner` sidecar continuation turn, not the initial `/goal` command turn.\n\nActive OpenCode goal:\n{}\n\nOnly continue this active goal. Ignore other `/goal` objectives and prior WAITING/GOAL_COMPLETE markers unless they match this objective. Before repeating a prior action, inspect the current artifact state and reconcile it with previous attempts.",
+        "{}\n\n{GOAL_VISIBLE_MARKER}, not the initial `/goal` command turn.\n\nActive OpenCode goal:\n{}\n\nOnly continue this active goal. Ignore other `/goal` objectives and prior WAITING/GOAL_COMPLETE markers unless they match this objective. Before repeating a prior action, inspect the current artifact state and reconcile it with previous attempts.",
         goal.visible_continue_text, goal.objective
     )
 }
@@ -3652,6 +3694,7 @@ mod tests {
                 &MessageSnapshot {
                     latest_message_id: Some("msg_user".to_string()),
                     latest_role: Some("user".to_string()),
+                    latest_text: None,
                     latest_user_is_sidecar: true,
                     latest_assistant_message_id: None,
                     latest_assistant_text: None,
@@ -3669,6 +3712,7 @@ mod tests {
                 &MessageSnapshot {
                     latest_message_id: Some("msg_assistant".to_string()),
                     latest_role: Some("assistant".to_string()),
+                    latest_text: None,
                     latest_user_is_sidecar: false,
                     latest_assistant_message_id: Some("msg_assistant".to_string()),
                     latest_assistant_text: Some("not complete".to_string()),
@@ -4275,6 +4319,35 @@ in_flight_timeout_ms = 444
         );
         assert_eq!(snapshot.latest_assistant_text, Some("first".to_string()));
         assert_eq!(snapshot.assistant_count, 1);
+
+        server.set_messages(
+            "ses_msg",
+            vec![user_message(
+                "msg_visible_sidecar",
+                &format!(
+                    "continue\n\n{GOAL_VISIBLE_MARKER}, not the initial `/goal` command turn."
+                ),
+                "",
+            )],
+        );
+        let snapshot = server.client().message_snapshot("ses_msg").unwrap();
+        assert!(snapshot.latest_user_is_sidecar);
+
+        server.set_messages(
+            "ses_msg",
+            vec![
+                user_message(
+                    "msg_visible_parent",
+                    &format!(
+                        "continue\n\n{GOAL_VISIBLE_MARKER}, not the initial `/goal` command turn."
+                    ),
+                    "",
+                ),
+                assistant_message_with_parent("msg_child", "msg_visible_parent", "working"),
+            ],
+        );
+        let snapshot = server.client().message_snapshot("ses_msg").unwrap();
+        assert!(snapshot.latest_assistant_parent_is_sidecar);
     }
 
     #[test]
@@ -5220,6 +5293,164 @@ in_flight_timeout_ms = 444
     }
 
     #[test]
+    fn tick_goal_waits_on_initial_goal_command_before_first_assistant() {
+        let _guard = http_lock().lock().unwrap();
+        let marker = "opencode_goal_launch_initial_wait";
+        let objective = "Wait for the initial command response.";
+        let server = FakeOpenCode::start();
+        server.add_session("ses_initial_wait", "Initial Wait", 1);
+        server.set_messages(
+            "ses_initial_wait",
+            vec![user_message(
+                "msg_goal",
+                &format!(
+                    "<goal_runner_launch>\nmarker: {marker}\n</goal_runner_launch>\n<objective>\n{objective}\n</objective>"
+                ),
+                "",
+            )],
+        );
+        let store = Store::open(test_db_path()).unwrap();
+        let goal = create_test_goal_record(&store, &server, "ses_initial_wait", objective, 3);
+
+        tick_goal(&store, &server.client(), &goal).unwrap();
+        let updated = store.goal(&goal.goal_id).unwrap().unwrap();
+        assert_eq!(updated.status, STATUS_ACTIVE);
+        assert_eq!(
+            updated.last_decision,
+            Some("waiting_for_initial_goal_response".to_string())
+        );
+        assert_eq!(updated.total_injections, 0);
+        assert_eq!(server.prompt_count(), 0);
+    }
+
+    #[test]
+    fn tick_goal_waits_on_sidecar_user_after_initial_goal_response() {
+        let _guard = http_lock().lock().unwrap();
+        let server = FakeOpenCode::start();
+        server.add_session("ses_sidecar_pending", "Sidecar Pending", 1);
+        server.set_messages(
+            "ses_sidecar_pending",
+            vec![
+                user_message("msg_goal", "/goal demo", ""),
+                assistant_message_with_parent(
+                    "msg_waiting",
+                    "msg_goal",
+                    "WAITING_FOR_GOAL_RUNNER_CONTINUATION",
+                ),
+            ],
+        );
+        let store = Store::open(test_db_path()).unwrap();
+        let goal = create_test_goal_record(
+            &store,
+            &server,
+            "ses_sidecar_pending",
+            "continue after waiting",
+            3,
+        );
+
+        let result = tick_goal(&store, &server.client(), &goal).unwrap();
+        assert!(result.injected);
+        let in_flight = store.goal(&goal.goal_id).unwrap().unwrap();
+        assert_eq!(in_flight.status, STATUS_ACTIVE);
+        assert_eq!(in_flight.total_injections, 1);
+        assert!(in_flight.in_flight_injection_id.is_some());
+        assert_eq!(
+            in_flight.last_seen_assistant_message_id,
+            Some("msg_waiting".to_string())
+        );
+
+        tick_goal(&store, &server.client(), &in_flight).unwrap();
+        let waiting = store.goal(&goal.goal_id).unwrap().unwrap();
+        assert_eq!(waiting.status, STATUS_ACTIVE);
+        assert_eq!(
+            waiting.last_decision,
+            Some("waiting_for_assistant_response".to_string())
+        );
+        assert!(waiting.in_flight_injection_id.is_some());
+        assert_eq!(server.prompt_count(), 1);
+        assert_eq!(
+            store.list_injections(&goal.goal_id, 1).unwrap()[0].status,
+            INJECTION_SUBMITTED
+        );
+    }
+
+    #[test]
+    fn tick_goal_waits_on_orphan_sidecar_user_without_reinjecting() {
+        let _guard = http_lock().lock().unwrap();
+        let server = FakeOpenCode::start();
+        server.add_session("ses_orphan_sidecar", "Orphan Sidecar", 1);
+        server.set_messages(
+            "ses_orphan_sidecar",
+            vec![user_message(
+                "msg_sidecar",
+                &format!(
+                    "continue\n\n{GOAL_VISIBLE_MARKER}, not the initial `/goal` command turn."
+                ),
+                "",
+            )],
+        );
+        let store = Store::open(test_db_path()).unwrap();
+        let goal = create_test_goal_record(&store, &server, "ses_orphan_sidecar", "finish", 3);
+        store
+            .conn
+            .execute(
+                "UPDATE goals SET total_injections = 1, last_injected_at_ms = ? WHERE goal_id = ?",
+                params![now_ms().unwrap(), goal.goal_id],
+            )
+            .unwrap();
+        let active = store.goal(&goal.goal_id).unwrap().unwrap();
+
+        tick_goal(&store, &server.client(), &active).unwrap();
+        let updated = store.goal(&goal.goal_id).unwrap().unwrap();
+        assert_eq!(updated.status, STATUS_ACTIVE);
+        assert_eq!(
+            updated.last_decision,
+            Some("waiting_for_assistant_response".to_string())
+        );
+        assert_eq!(server.prompt_count(), 0);
+    }
+
+    #[test]
+    fn tick_goal_pauses_stale_orphan_sidecar_user() {
+        let _guard = http_lock().lock().unwrap();
+        let server = FakeOpenCode::start();
+        server.add_session("ses_orphan_timeout", "Orphan Timeout", 1);
+        server.set_messages(
+            "ses_orphan_timeout",
+            vec![user_message(
+                "msg_sidecar",
+                &format!(
+                    "continue\n\n{GOAL_VISIBLE_MARKER}, not the initial `/goal` command turn."
+                ),
+                "",
+            )],
+        );
+        let store = Store::open(test_db_path()).unwrap();
+        let goal = create_test_goal_record(&store, &server, "ses_orphan_timeout", "finish", 3);
+        store
+            .conn
+            .execute(
+                "UPDATE goals SET total_injections = 1, last_injected_at_ms = ?, in_flight_timeout_ms = 600000 WHERE goal_id = ?",
+                params![now_ms().unwrap() - IDLE_IN_FLIGHT_TIMEOUT_MS - 1, goal.goal_id],
+            )
+            .unwrap();
+        let active = store.goal(&goal.goal_id).unwrap().unwrap();
+
+        tick_goal(&store, &server.client(), &active).unwrap();
+        let updated = store.goal(&goal.goal_id).unwrap().unwrap();
+        assert_eq!(updated.status, STATUS_PAUSED);
+        assert_eq!(
+            updated.last_decision,
+            Some("paused_in_flight_timeout".to_string())
+        );
+        assert_eq!(
+            updated.last_error,
+            Some("orphan_sidecar_response_timeout".to_string())
+        );
+        assert_eq!(server.prompt_count(), 0);
+    }
+
+    #[test]
     fn tick_goal_does_not_complete_from_conflicting_goal_marker() {
         let _guard = http_lock().lock().unwrap();
         let server = FakeOpenCode::start();
@@ -5242,6 +5473,7 @@ in_flight_timeout_ms = 444
                 &MessageSnapshot {
                     latest_message_id: None,
                     latest_role: None,
+                    latest_text: None,
                     latest_user_is_sidecar: false,
                     latest_assistant_message_id: None,
                     latest_assistant_text: None,
@@ -5296,6 +5528,7 @@ in_flight_timeout_ms = 444
                 &MessageSnapshot {
                     latest_message_id: None,
                     latest_role: None,
+                    latest_text: None,
                     latest_user_is_sidecar: false,
                     latest_assistant_message_id: None,
                     latest_assistant_text: None,
@@ -5337,6 +5570,7 @@ in_flight_timeout_ms = 444
                 &MessageSnapshot {
                     latest_message_id: None,
                     latest_role: None,
+                    latest_text: None,
                     latest_user_is_sidecar: false,
                     latest_assistant_message_id: None,
                     latest_assistant_text: None,
@@ -5374,6 +5608,7 @@ in_flight_timeout_ms = 444
                 &MessageSnapshot {
                     latest_message_id: None,
                     latest_role: None,
+                    latest_text: None,
                     latest_user_is_sidecar: false,
                     latest_assistant_message_id: None,
                     latest_assistant_text: None,
@@ -5425,6 +5660,7 @@ in_flight_timeout_ms = 444
                 &MessageSnapshot {
                     latest_message_id: None,
                     latest_role: None,
+                    latest_text: None,
                     latest_user_is_sidecar: false,
                     latest_assistant_message_id: None,
                     latest_assistant_text: None,
