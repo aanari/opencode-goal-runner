@@ -184,6 +184,8 @@ opencode-goal-runner logs --goal goal_xxx
 
 The `/goal` command runs `opencode-goal-runner launch`, which starts a detached worker, waits for the marked command message to appear in OpenCode, extracts the objective from that message, and starts the goal loop. `start --latest` remains available for scripts or manual CLI use.
 
+`launch` rewrites `~/.config/opencode-goal-runner/launch.log` for each new `/goal` launch. The file is intentionally the latest launch only, with a header that includes the runner version, executable path, pid, marker, base URL, and worker spawn status. `doctor` also prints the runner version, executable path, and launch log path.
+
 ## Config file
 
 Default path:
@@ -418,6 +420,13 @@ The durable instructions go into the hidden `system` field. The model is asked t
 - check `base_url` in config or pass `--base-url`
 - if the server has a password, set `OPENCODE_GOAL_PASSWORD`
 - expected error: `failed to GET /session from http://127.0.0.1:4096`
+
+`/goal` launch looks flaky:
+
+- run `opencode-goal-runner doctor` and check the printed runner version, executable path, and launch log path
+- inspect the latest launch only with `tail -100 ~/.config/opencode-goal-runner/launch.log`
+- the launch log is overwritten per launch, so old pre-upgrade failures should not appear in a fresh run
+- if the version or executable path is wrong, OpenCode is invoking a different `opencode-goal-runner` from its PATH
 
 Model check fails:
 

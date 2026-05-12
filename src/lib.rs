@@ -1,6 +1,6 @@
-use std::fs::{self, OpenOptions};
+use std::fs::{self, File, OpenOptions};
 use std::io::{self, Write};
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::process::{Command as StdCommand, Stdio};
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
@@ -39,6 +39,7 @@ const IDLE_IN_FLIGHT_TIMEOUT_MS: i64 = 30_000;
 const DEFAULT_LAUNCH_WAIT_SECONDS: u64 = 60;
 const MAX_BACKOFF_MS: i64 = 30_000;
 const LAUNCH_MARKER_PREFIX: &str = "opencode_goal_launch_";
+const RUNNER_VERSION: &str = env!("CARGO_PKG_VERSION");
 #[derive(Parser)]
 #[command(version, about = "External goal runner for OpenCode")]
 struct Cli {
@@ -469,6 +470,7 @@ fn run_command(cli: Cli) -> Result<()> {
                 validate_launch_settings(&settings, lock_ttl_ms, &config)?;
                 return launch_background(LaunchBackgroundInput {
                     global_args: launch_global_args,
+                    base_url: resolve_base_url(cli.base_url.clone(), &config),
                     settings,
                     lock_ttl_ms,
                     wait_seconds,
@@ -478,7 +480,7 @@ fn run_command(cli: Cli) -> Result<()> {
             let marker = marker.context("launch worker requires --marker")?;
             let base_url = resolve_base_url(cli.base_url, &config);
             let password = cli.password;
-            run_launch_worker(
+            let result = run_launch_worker(
                 &Store::open(resolve_db_path(cli.db)?)?,
                 &OpenCodeClient::new(base_url.clone(), password.clone())?,
                 LaunchWorkerInput {
@@ -495,7 +497,11 @@ fn run_command(cli: Cli) -> Result<()> {
                         DEFAULT_LOCK_TTL_MS,
                     )?,
                 },
-            )
+            );
+            if let Err(error) = &result {
+                eprintln!("launch worker failed: {error:#}");
+            }
+            result
         }
         Command::InjectOnce {
             session,
@@ -581,6 +587,7 @@ struct CreateSettings {
 
 struct LaunchBackgroundInput {
     global_args: Vec<String>,
+    base_url: String,
     settings: CreateSettings,
     lock_ttl_ms: Option<i64>,
     wait_seconds: u64,
@@ -899,26 +906,62 @@ fn launch_background_process(
         fs::create_dir_all(parent)
             .with_context(|| format!("failed to create {}", parent.display()))?;
     }
-    let stdout = OpenOptions::new()
+    let mut log = OpenOptions::new()
         .create(true)
-        .append(true)
+        .write(true)
+        .truncate(true)
         .open(&log_path)
         .with_context(|| format!("failed to open launch log {}", log_path.display()))?;
-    let stderr = stdout
+    write_launch_header(&mut log, &marker, &exe, &input)?;
+    let stdout = log
+        .try_clone()
+        .with_context(|| format!("failed to clone launch log {}", log_path.display()))?;
+    let stderr = log
         .try_clone()
         .with_context(|| format!("failed to clone launch log {}", log_path.display()))?;
 
-    StdCommand::new(exe)
+    let child = StdCommand::new(&exe)
         .args(launch_worker_args(&marker, input))
         .stdin(Stdio::null())
         .stdout(Stdio::from(stdout))
         .stderr(Stdio::from(stderr))
         .spawn()
         .context("failed to spawn opencode-goal-runner launch worker")?;
+    writeln!(log, "status: spawned worker pid={}", child.id())?;
+    log.flush()?;
 
     println!("marker: {marker}");
     println!("status: background runner launch requested");
+    println!("version: opencode-goal-runner {RUNNER_VERSION}");
+    println!("executable: {}", exe.display());
     println!("log: {}", log_path.display());
+    Ok(())
+}
+
+fn write_launch_header(
+    log: &mut File,
+    marker: &str,
+    exe: &Path,
+    input: &LaunchBackgroundInput,
+) -> Result<()> {
+    writeln!(
+        log,
+        "============================================================"
+    )?;
+    writeln!(log, "opencode-goal-runner launch")?;
+    writeln!(log, "timestamp: {}", format_ms(now_ms()?))?;
+    writeln!(log, "version: {RUNNER_VERSION}")?;
+    writeln!(log, "parent_pid: {}", std::process::id())?;
+    writeln!(log, "marker: {marker}")?;
+    writeln!(log, "executable: {}", exe.display())?;
+    writeln!(log, "base_url: {}", input.base_url)?;
+    writeln!(log, "wait_seconds: {}", input.wait_seconds)?;
+    writeln!(log, "status: spawning worker")?;
+    writeln!(
+        log,
+        "============================================================"
+    )?;
+    log.flush()?;
     Ok(())
 }
 
@@ -927,6 +970,9 @@ fn run_launch_worker(
     client: &OpenCodeClient,
     input: LaunchWorkerInput<'_>,
 ) -> Result<()> {
+    println!("worker version: {RUNNER_VERSION}");
+    println!("worker pid: {}", std::process::id());
+    println!("worker base_url: {}", input.base_url);
     println!(
         "waiting up to {}s for /goal command marker {}",
         input.wait.as_secs(),
@@ -1598,6 +1644,15 @@ fn list_sessions(client: &OpenCodeClient, limit: usize) -> Result<()> {
 }
 
 fn doctor(client: &OpenCodeClient, input: DoctorInput) -> Result<()> {
+    println!("opencode-goal-runner {RUNNER_VERSION}");
+    match std::env::current_exe() {
+        Ok(path) => println!("runner_executable: {}", path.display()),
+        Err(error) => println!("warn runner_executable unavailable: {error}"),
+    }
+    match resolve_launch_log_path() {
+        Ok(path) => println!("launch_log: {}", path.display()),
+        Err(error) => println!("warn launch_log unavailable: {error}"),
+    }
     println!("checking OpenCode server at {}", client.base_url);
     for path in ["/session", "/session/status", "/permission", "/question"] {
         client.get_json(path)?;
@@ -3727,6 +3782,7 @@ mod tests {
             "opencode_goal_launch_test",
             LaunchBackgroundInput {
                 global_args: vec!["--db".to_string(), "/tmp/goals.sqlite3".to_string()],
+                base_url: "http://127.0.0.1:4096".to_string(),
                 settings: CreateSettings {
                     agent: Some("build".to_string()),
                     provider: None,
@@ -3750,10 +3806,13 @@ mod tests {
     #[test]
     fn launch_background_process_spawns_worker_and_creates_log() {
         let log_path = test_dir().join("launch.log");
+        fs::create_dir_all(log_path.parent().unwrap()).unwrap();
+        fs::write(&log_path, "old connection refused failure\n").unwrap();
         let started = Instant::now();
         launch_background_process(
             LaunchBackgroundInput {
                 global_args: Vec::new(),
+                base_url: "http://127.0.0.1:4096".to_string(),
                 settings: CreateSettings {
                     agent: None,
                     provider: None,
@@ -3774,6 +3833,14 @@ mod tests {
         .unwrap();
         assert!(started.elapsed() < Duration::from_secs(1));
         assert!(log_path.is_file());
+        let log = fs::read_to_string(&log_path).unwrap();
+        assert!(!log.contains("old connection refused failure"));
+        assert!(log.contains("opencode-goal-runner launch"));
+        assert!(log.contains("version: "));
+        assert!(log.contains("marker: opencode_goal_launch_spawn_test"));
+        assert!(log.contains("executable: "));
+        assert!(log.contains("base_url: http://127.0.0.1:4096"));
+        assert!(log.contains("status: spawned worker pid="));
     }
 
     #[test]
@@ -4281,6 +4348,7 @@ in_flight_timeout_ms = 444
             wait_for_launch_command(&server.client(), marker, Duration::from_secs(2)).unwrap();
         assert_eq!(command.session_id, "ses_goal");
         assert_eq!(command.objective, "Fix delayed launch");
+        assert_eq!(server.prompt_count(), 0);
     }
 
     #[test]
@@ -4318,6 +4386,7 @@ in_flight_timeout_ms = 444
         let updated = store.goal(&goal.goal_id).unwrap().unwrap();
         assert_eq!(updated.total_injections, 1);
         assert_eq!(updated.status, STATUS_ACTIVE);
+        assert_eq!(server.prompt_count(), 1);
         assert_eq!(
             store.list_injections(&goal.goal_id, 1).unwrap()[0].status,
             INJECTION_COMPLETED
