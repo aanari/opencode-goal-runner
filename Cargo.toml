@@ -2,6 +2,10 @@
 name = "opencode-goal-runner"
 version = "0.1.0"
 edition = "2024"
+description = "Codex-like goal runner sidecar for OpenCode"
+license = "MIT"
+repository = "https://github.com/aanari/opencode-goal-runner"
+readme = "README.md"
 
 [dependencies]
 anyhow = "1"

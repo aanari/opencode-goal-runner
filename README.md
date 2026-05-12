@@ -1,5 +1,8 @@
 # opencode-goal-runner
 
+[![CI](https://github.com/aanari/opencode-goal-runner/actions/workflows/ci.yml/badge.svg)](https://github.com/aanari/opencode-goal-runner/actions/workflows/ci.yml)
+[![Release](https://github.com/aanari/opencode-goal-runner/actions/workflows/release.yml/badge.svg)](https://github.com/aanari/opencode-goal-runner/actions/workflows/release.yml)
+
 `opencode-goal-runner` is a self-contained Rust sidecar that approximates Codex goal mode for OpenCode without forking or modifying OpenCode.
 
 It owns a persistent goal record, watches an OpenCode session over server mode, and injects continuation prompts only when the session is idle and unblocked. The optional `/goal` command launches the runner and loads the prompt contract. The Rust binary owns the runtime loop, and the installed runner has no Node.js, Bun, or OpenCode JS SDK runtime dependency.
@@ -87,6 +90,10 @@ For local development, install a symlink to the release binary instead of copyin
 ```
 
 The installed runner is a Rust binary. The target machine does not need Node.js, Bun, or the OpenCode JS SDK for the runner itself.
+
+## License
+
+MIT. See [LICENSE](LICENSE).
 
 ## Release binaries
 
