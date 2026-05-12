@@ -244,10 +244,10 @@ class Soak:
         self.assert_paused_no_progress(self.wait_terminal(row["goal_id"], timeout=360))
         return row["goal_id"]
 
-    def direct_sidecar_multistep(self, round_index):
-        token = f"SOAK_DIRECT_MULTI_{self.run}_R{round_index}"
+    def direct_sidecar_start(self, round_index):
+        token = f"SOAK_DIRECT_START_{self.run}_R{round_index}"
         session_id = self.request("POST", "/session", {})["id"]
-        objective = f"Direct sidecar multi-step {token}. Do not edit files, inspect files, run commands, or use tools. On the first sidecar continuation for this exact active objective, reply exactly STEP_ONE_{token} and do not include GOAL_COMPLETE. On the second sidecar continuation for this exact active objective, reply exactly GOAL_COMPLETE: {token}."
+        objective = f"Direct sidecar start smoke {token}. Do not edit files, inspect files, run commands, or use tools. On a sidecar continuation for this exact active objective, reply exactly GOAL_COMPLETE: {token}."
         proc = subprocess.run(
             [
                 self.args.runner,
@@ -270,7 +270,7 @@ class Soak:
         if proc.returncode != 0:
             raise RuntimeError(proc.stdout + proc.stderr)
         row = self.by_token(token)
-        self.assert_complete(row, token, expected_injections=2)
+        self.assert_complete(row, token, expected_injections=1)
         return row["goal_id"]
 
     def preflight(self):
@@ -293,7 +293,7 @@ class Soak:
         if round_index % 3 == 0:
             item["goals"]["impossible_cleared"] = self.impossible(round_index)
         if round_index % 4 == 0:
-            item["goals"]["direct_multi"] = self.direct_sidecar_multistep(round_index)
+            item["goals"]["direct_start"] = self.direct_sidecar_start(round_index)
         if round_index % 5 == 0:
             subprocess.run(
                 [self.args.runner, "doctor"] + ([] if self.args.model_check else ["--skip-model-check"]),

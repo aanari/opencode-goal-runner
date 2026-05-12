@@ -640,7 +640,7 @@ Each soak round exercises:
 - stale `GOAL_COMPLETE` marker isolation
 - file recovery after partial progress
 - no-progress pause-and-clear behavior on every third round
-- direct sidecar multi-step continuation on every fourth round
+- direct sidecar start path on every fourth round
 
 ## Release checklist
 

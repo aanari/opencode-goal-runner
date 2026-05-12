@@ -78,6 +78,24 @@ A four-round run of the checked-in script completed afterward, covering every so
 - Leftover locks: `0`.
 - Leftover active/paused goals: `0`.
 
+During a later 3-hour soak attempt, the runner stayed healthy but the model completed the direct sidecar multi-step smoke in one injection instead of following the scripted two-step choreography. The soak script now treats that case as a direct sidecar start-path smoke rather than asserting exact multi-turn model behavior; repeated multi-injection behavior remains covered by the impossible/no-progress case.
+
+Completed the full 3-hour checked-in live soak on 2026-05-11 against `opencode --port 4096`.
+
+- Run token: `1778535653859`.
+- Log: `/tmp/opencode-goal-soak-20260511-144053-retry.log`.
+- Rounds: `351`.
+- Completed goals: `964`.
+- Impossible/no-progress goals paused and cleared as expected: `117`.
+- Sidecar continuations injected: `1327`.
+- Run-scoped failed goals: `0`.
+- Run-scoped errors: `0`.
+- Leftover locks: `0`.
+- Leftover active/paused goals: `0`.
+- OpenCode blockers after the run: empty `/session/status`, `/permission`, and `/question`.
+
+The soak repeatedly exercised installed `/goal` command launches, stale marker isolation, partial-progress recovery, no-progress pause/clear, direct sidecar start, periodic `doctor`, and transient OpenCode HTTP failures. Transient upstream errors were retried without leaving stuck injections, locks, or active goals.
+
 ## What worked
 
 - The installed release binary ran the goal loop without Node.js, Bun, or the OpenCode JS SDK.
