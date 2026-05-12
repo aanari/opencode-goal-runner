@@ -49,5 +49,7 @@ jobs:
 
       - name: Coverage
         run: |
-          cargo install cargo-llvm-cov --locked
+          if ! command -v cargo-llvm-cov >/dev/null 2>&1; then
+            cargo install cargo-llvm-cov --locked
+          fi
           cargo llvm-cov --locked --fail-under-lines 95
