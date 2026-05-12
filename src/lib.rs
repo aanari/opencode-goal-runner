@@ -973,15 +973,41 @@ fn wait_for_launch_command(
     timeout: Duration,
 ) -> Result<LaunchCommandMessage> {
     let start = Instant::now();
+    let mut last_retryable_error = None;
+    let mut last_retryable_log = None;
     loop {
-        if let Some(command) = find_launch_command(client, marker)? {
-            return Ok(command);
-        }
         if start.elapsed() >= timeout {
+            if let Some(error) = last_retryable_error {
+                bail!(
+                    "timed out waiting for /goal command marker {marker}; last OpenCode API error: {error}"
+                );
+            }
             bail!("timed out waiting for /goal command marker {marker}");
+        }
+        match find_launch_command(client, marker) {
+            Ok(Some(command)) => return Ok(command),
+            Ok(None) => {}
+            Err(error) if is_retryable_connect_error(&error) => {
+                if last_retryable_log
+                    .is_none_or(|log: Instant| log.elapsed() >= Duration::from_secs(5))
+                {
+                    println!("waiting for OpenCode API at {}: {error}", client.base_url);
+                    last_retryable_log = Some(Instant::now());
+                }
+                last_retryable_error = Some(error.to_string());
+            }
+            Err(error) => return Err(error),
         }
         std::thread::sleep(Duration::from_millis(250));
     }
+}
+
+fn is_retryable_connect_error(error: &anyhow::Error) -> bool {
+    error.chain().any(|cause| {
+        cause
+            .downcast_ref::<reqwest::Error>()
+            .is_some_and(|error| error.is_connect() || error.is_timeout())
+    })
 }
 
 fn find_launch_command(
@@ -1133,6 +1159,7 @@ fn run_goal_loop_locked(
     let initial_goal = store.goal(goal_id)?.context("goal not found")?;
     let mut injected = 0;
     let mut stop_after_in_flight = max_injections == Some(0);
+    let mut last_api_error_log = None;
 
     println!(
         "running goal {} for session {}",
@@ -1162,7 +1189,28 @@ fn run_goal_loop_locked(
         }
 
         store.renew_lock(&goal.session_id, &goal.goal_id, owner_id, lock_ttl_ms)?;
-        let result = tick_goal(store, client, &goal)?;
+        let result = match tick_goal(store, client, &goal) {
+            Ok(result) => {
+                last_api_error_log = None;
+                result
+            }
+            Err(error) if is_retryable_connect_error(&error) => {
+                store.update_decision(
+                    &goal.goal_id,
+                    "waiting_on_opencode_api",
+                    Some(&error.to_string()),
+                )?;
+                if last_api_error_log
+                    .is_none_or(|log: Instant| log.elapsed() >= Duration::from_secs(5))
+                {
+                    println!("waiting for OpenCode API at {}: {error}", client.base_url);
+                    last_api_error_log = Some(Instant::now());
+                }
+                std::thread::sleep(Duration::from_millis(goal.poll_interval_ms as u64));
+                continue;
+            }
+            Err(error) => return Err(error),
+        };
         if result.injected {
             injected += 1;
             if max_injections.is_some_and(|max| injected >= max) {
@@ -2956,7 +3004,7 @@ mod tests {
     use super::*;
     use std::collections::{HashMap, VecDeque};
     use std::io::{Read, Write};
-    use std::net::{TcpListener, TcpStream};
+    use std::net::{SocketAddr, TcpListener, TcpStream};
     use std::sync::atomic::{AtomicBool, Ordering};
     use std::sync::{Arc, Mutex, OnceLock};
     use std::thread::{self, JoinHandle};
@@ -3004,6 +3052,44 @@ mod tests {
             let state_for_thread = state.clone();
             let stop_for_thread = stop.clone();
             let handle = thread::spawn(move || {
+                while !stop_for_thread.load(Ordering::SeqCst) {
+                    match listener.accept() {
+                        Ok((stream, _)) => {
+                            let state = state_for_thread.clone();
+                            thread::spawn(move || handle_connection(stream, &state));
+                        }
+                        Err(error) if error.kind() == std::io::ErrorKind::WouldBlock => {
+                            thread::sleep(Duration::from_millis(5));
+                        }
+                        Err(_) => break,
+                    }
+                }
+            });
+            Self {
+                base_url,
+                state,
+                stop,
+                handle: Some(handle),
+            }
+        }
+
+        fn start_on_addr_after(addr: SocketAddr, delay: Duration) -> Self {
+            let base_url = format!("http://{addr}");
+            let state = Arc::new(Mutex::new(FakeState {
+                prompt_status: 204,
+                delete_status: 200,
+                ..Default::default()
+            }));
+            let stop = Arc::new(AtomicBool::new(false));
+            let state_for_thread = state.clone();
+            let stop_for_thread = stop.clone();
+            let handle = thread::spawn(move || {
+                thread::sleep(delay);
+                if stop_for_thread.load(Ordering::SeqCst) {
+                    return;
+                }
+                let listener = TcpListener::bind(addr).unwrap();
+                listener.set_nonblocking(true).unwrap();
                 while !stop_for_thread.load(Ordering::SeqCst) {
                     match listener.accept() {
                         Ok((stream, _)) => {
@@ -4167,6 +4253,74 @@ in_flight_timeout_ms = 444
                 .unwrap_err()
                 .to_string()
                 .contains("timed out waiting")
+        );
+    }
+
+    #[test]
+    fn launch_command_waits_through_initial_api_connection_refused() {
+        let _guard = http_lock().lock().unwrap();
+        let marker = "opencode_goal_launch_delayed";
+        let probe = TcpListener::bind("127.0.0.1:0").unwrap();
+        let addr = probe.local_addr().unwrap();
+        drop(probe);
+
+        let server = FakeOpenCode::start_on_addr_after(addr, Duration::from_millis(150));
+        server.add_session("ses_goal", "Goal", 1);
+        server.set_messages(
+            "ses_goal",
+            vec![user_message(
+                "msg_goal",
+                &format!(
+                    "<goal_runner_launch>\nmarker: {marker}\n</goal_runner_launch>\n<objective>\nFix delayed launch\n</objective>"
+                ),
+                "",
+            )],
+        );
+
+        let command =
+            wait_for_launch_command(&server.client(), marker, Duration::from_secs(2)).unwrap();
+        assert_eq!(command.session_id, "ses_goal");
+        assert_eq!(command.objective, "Fix delayed launch");
+    }
+
+    #[test]
+    fn run_goal_loop_waits_through_initial_api_connection_refused() {
+        let _guard = http_lock().lock().unwrap();
+        let probe = TcpListener::bind("127.0.0.1:0").unwrap();
+        let addr = probe.local_addr().unwrap();
+        drop(probe);
+
+        let server = FakeOpenCode::start_on_addr_after(addr, Duration::from_millis(150));
+        server.add_session("ses_delayed_loop", "Delayed Loop", 1);
+        server.push_prompt_reply(Some("not complete yet"));
+        let store = Store::open(test_db_path()).unwrap();
+        let goal = create_test_goal_record(
+            &store,
+            &server,
+            "ses_delayed_loop",
+            "Delayed loop objective",
+            2,
+        );
+
+        run_goal_loop(
+            &store,
+            GoalSelector {
+                goal: Some(goal.goal_id.clone()),
+                session: None,
+            },
+            None,
+            Some(server.base_url.clone()),
+            Some(1),
+            1_000,
+        )
+        .unwrap();
+
+        let updated = store.goal(&goal.goal_id).unwrap().unwrap();
+        assert_eq!(updated.total_injections, 1);
+        assert_eq!(updated.status, STATUS_ACTIVE);
+        assert_eq!(
+            store.list_injections(&goal.goal_id, 1).unwrap()[0].status,
+            INJECTION_COMPLETED
         );
     }
 
