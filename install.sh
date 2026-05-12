@@ -40,9 +40,17 @@ check_tools() {
   }
 }
 
+check_coverage_tool() {
+  cargo llvm-cov --version >/dev/null 2>&1 || {
+    echo "error: cargo-llvm-cov is required for --check." >&2
+    echo "install with: cargo install cargo-llvm-cov" >&2
+    exit 1
+  }
+}
+
 build_release() {
   check_tools
-  (cd "$ROOT" && cargo build --release)
+  (cd "$ROOT" && cargo build --release --locked)
 }
 
 install_copy() {
@@ -72,9 +80,10 @@ uninstall() {
 
 run_check() {
   check_tools
-  (cd "$ROOT" && cargo test)
-  (cd "$ROOT" && cargo llvm-cov --fail-under-lines 95)
-  (cd "$ROOT" && cargo build --release)
+  check_coverage_tool
+  (cd "$ROOT" && cargo test --locked)
+  (cd "$ROOT" && cargo llvm-cov --locked --fail-under-lines 95)
+  (cd "$ROOT" && cargo build --release --locked)
 }
 
 case "${1:-}" in

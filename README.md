@@ -129,7 +129,13 @@ rustup target add x86_64-unknown-linux-musl
 
 ## OpenCode setup
 
-Start OpenCode server mode in the project you want the agent to work on:
+For the normal inside-OpenCode `/goal` workflow, start the OpenCode TUI with a local server port in the project you want the agent to work on:
+
+```sh
+opencode --hostname 127.0.0.1 --port 4096
+```
+
+Headless server mode also works when you want to drive OpenCode without the TUI:
 
 ```sh
 opencode serve --hostname 127.0.0.1 --port 4096
@@ -158,7 +164,7 @@ The product surface is just the binary plus this copyable command file. There is
 Normal workflow:
 
 ```sh
-opencode serve --hostname 127.0.0.1 --port 4096
+opencode --hostname 127.0.0.1 --port 4096
 opencode-goal-runner doctor
 ```
 

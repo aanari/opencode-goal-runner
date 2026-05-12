@@ -96,14 +96,14 @@ fi
 mkdir -p "$DIST"
 
 if [ "$RUN_CHECKS" -eq 1 ]; then
-  (cd "$ROOT" && cargo test)
+  (cd "$ROOT" && cargo test --locked)
 fi
 
-(cd "$ROOT" && cargo build --release --target "$MAC_TARGET")
+(cd "$ROOT" && cargo build --release --locked --target "$MAC_TARGET")
 copy_artifact "$MAC_TARGET"
 
 if [ "$BUILD_LINUX" -eq 1 ]; then
-  (cd "$ROOT" && cargo zigbuild --release --target "$LINUX_TARGET")
+  (cd "$ROOT" && cargo zigbuild --release --locked --target "$LINUX_TARGET")
   copy_artifact "$LINUX_TARGET"
 fi
 

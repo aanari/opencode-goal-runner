@@ -49,7 +49,9 @@ jobs:
         run: ./build-release.sh --check
 
       - name: Checksums
-        run: shasum -a 256 dist/* > dist/SHA256SUMS
+        run: |
+          cd dist
+          shasum -a 256 opencode-goal-runner-* > SHA256SUMS
 
       - name: Upload artifacts
         uses: actions/upload-artifact@v7
